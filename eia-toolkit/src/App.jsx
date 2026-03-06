@@ -36,9 +36,9 @@ const ROLE_CFG = {
 };
 
 const PLANS = {
-  starter:      { label:"スターター",          price:"¥80,000/案件" },
-  professional: { label:"プロフェッショナル",  price:"¥480,000/年" },
-  enterprise:   { label:"エンタープライズ",    price:"¥1,200,000/年" },
+  starter:      { label:"スターター",         price:"¥80,000/案件",   maxUsers:3,  maxProjects:5,  color:"#6B7280" },
+  professional: { label:"プロフェッショナル", price:"¥480,000/年",    maxUsers:10, maxProjects:999, color:"#1B4332" },
+  enterprise:   { label:"エンタープライズ",   price:"¥1,200,000/年",  maxUsers:999,maxProjects:999, color:"#7C3AED" },
 };
 
 const ORGS = [
@@ -211,8 +211,8 @@ function LoginScreen({ onLogin }) {
         .single();
       setLoading(false);
       onLogin({
-        user: data.user,
-        profile,
+        user: { id:data.user.id, name:profile?.name||data.user.email,
+                email:data.user.email, role:profile?.role||"pm" },
         org: profile?.organizations ?? { name: data.user.email, plan: "starter" },
       });
       return;
@@ -221,7 +221,10 @@ function LoginScreen({ onLogin }) {
     // ── Demo fallback (no Supabase configured) ───────────
     setTimeout(() => {
       setLoading(false);
-      onLogin({ user: null, profile: null, org: ORGS[0] });
+      onLogin({
+        user: { id:"demo", name:email||"デモユーザー", email:email||"demo@eia-toolkit.jp", role:"admin" },
+        org: ORGS[0]
+      });
     }, 900);
   };
 
@@ -337,10 +340,10 @@ function LoginScreen({ onLogin }) {
 }
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
-function Header({ org, onLogout }) {
+function Header({ org, currentUser, onLogout, onOpenProfile, setActive }) {
   const [menu, setMenu] = useState(false);
-  const user = TEAM[0];
-  const role = ROLE_CFG[user.role];
+  const role = ROLE_CFG[currentUser?.role||"pm"];
+  const initials = (currentUser?.name||"?").slice(0,1);
   return <div style={{ height:64, background:C.surface, borderBottom:`1px solid ${C.border}`,
     display:"flex", alignItems:"center", padding:"0 28px",
     position:"sticky", top:0, zIndex:100, boxShadow:C.shadow, gap:16 }}>
@@ -355,39 +358,49 @@ function Header({ org, onLogout }) {
           fontFamily:"'DM Mono',monospace", letterSpacing:"0.06em" }}>RECORTA</div>
       </div>
     </div>
-    <div style={{ background:C.light, border:`1px solid ${C.primary}33`,
+    {org && <div style={{ background:C.light, border:`1px solid ${C.primary}33`,
       borderRadius:8, padding:"7px 14px", display:"flex", alignItems:"center", gap:8 }}>
       <div style={{ width:8, height:8, borderRadius:"50%", background:C.mid }} />
       <span style={{ color:C.primary, fontSize:14, fontWeight:600 }}>{org.name}</span>
-      <Chip color={C.primary}>{PLANS[org.plan].label}</Chip>
-    </div>
+      <Chip color={PLANS[org.plan]?.color||C.primary}>{PLANS[org.plan]?.label}</Chip>
+    </div>}
     <div style={{ flex:1 }} />
     <div style={{ position:"relative" }}>
       <div onClick={()=>setMenu(!menu)} style={{ display:"flex", alignItems:"center",
         gap:10, cursor:"pointer", padding:"7px 12px", borderRadius:8,
-        background:menu?C.bg:"transparent",
-        border:`1px solid ${menu?C.border:"transparent"}` }}>
+        background:menu?C.bg:"transparent", border:`1px solid ${menu?C.border:"transparent"}` }}>
         <div style={{ width:38, height:38, borderRadius:"50%",
           background:`linear-gradient(135deg,${C.primary},${C.blue})`,
           display:"flex", alignItems:"center", justifyContent:"center",
-          color:C.white, fontWeight:700, fontSize:15 }}>田</div>
+          color:C.white, fontWeight:700, fontSize:15 }}>{initials}</div>
         <div>
-          <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{user.name}</div>
+          <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{currentUser?.name||"―"}</div>
           <Chip color={role.color} bg={role.badge} size={10}>{role.label}</Chip>
         </div>
         <span style={{ color:C.textMuted }}>▾</span>
       </div>
       {menu && <div style={{ position:"absolute", right:0, top:"calc(100% + 8px)",
         background:C.surface, border:`1px solid ${C.border}`,
-        borderRadius:12, boxShadow:C.shadowMd, width:200, overflow:"hidden", zIndex:200 }}>
-        {["👤 プロフィール設定","🔔 通知設定","🔒 パスワード変更"].map(item=>(
-          <div key={item} style={{ padding:"13px 16px", cursor:"pointer", fontSize:14,
-            color:C.text, borderBottom:`1px solid ${C.borderLight}` }}
+        borderRadius:12, boxShadow:C.shadowMd, width:230, overflow:"hidden", zIndex:200 }}>
+        <div style={{ padding:"14px 16px", borderBottom:`1px solid ${C.borderLight}`, background:C.bg }}>
+          <div style={{ fontSize:13, fontWeight:700, color:C.text }}>{currentUser?.name}</div>
+          <div style={{ fontSize:12, color:C.textMuted, marginTop:2 }}>{currentUser?.email}</div>
+        </div>
+        {[
+          { icon:"👤", label:"プロフィール設定", action:()=>{ setMenu(false); onOpenProfile("profile"); } },
+          { icon:"🔒", label:"パスワード変更",   action:()=>{ setMenu(false); onOpenProfile("password"); } },
+          { icon:"⚙️", label:"アカウント管理",   action:()=>{ setMenu(false); setActive("account"); } },
+        ].map(item=>(
+          <div key={item.label} onClick={item.action}
+            style={{ padding:"13px 16px", cursor:"pointer", fontSize:14, color:C.text,
+              borderBottom:`1px solid ${C.borderLight}`, display:"flex", alignItems:"center", gap:10 }}
             onMouseEnter={e=>e.currentTarget.style.background=C.bg}
-            onMouseLeave={e=>e.currentTarget.style.background="transparent"}>{item}</div>
+            onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+            {item.icon} {item.label}
+          </div>
         ))}
         <div onClick={onLogout} style={{ padding:"13px 16px", cursor:"pointer",
-          fontSize:14, color:C.red, fontWeight:700 }}
+          fontSize:14, color:C.red, fontWeight:700, display:"flex", alignItems:"center", gap:10 }}
           onMouseEnter={e=>e.currentTarget.style.background=C.redLight}
           onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
           ↩️ ログアウト
@@ -396,6 +409,7 @@ function Header({ org, onLogout }) {
     </div>
   </div>;
 }
+
 
 // ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 function Sidebar({ active, setActive }) {
@@ -441,7 +455,7 @@ function Sidebar({ active, setActive }) {
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({ projects, setSelectedProject, setActive, onNew }) {
+function Dashboard({ projects, setSelectedProject, setActive, onNew, onDelete, currentUser }) {
   const totalSpecies = projects.reduce((a,b) => a + b.species.length, 0);
   const totalRL = projects.reduce((a,b) => a + b.redListCount, 0);
   const urgent = projects.filter(p => Math.floor((new Date(p.deadline)-new Date())/86400000)<60).length;
@@ -490,12 +504,14 @@ function Dashboard({ projects, setSelectedProject, setActive, onNew }) {
     <SLabel>プロジェクト一覧 ({projects.length}件)</SLabel>
     <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:16 }}>
       {projects.map(p => <ProjectCard key={p.id} project={p}
-        onClick={()=>{ setSelectedProject(p); setActive("project"); }} />)}
+        onClick={()=>{ setSelectedProject(p); setActive("project"); }}
+        onDelete={["admin","pm"].includes(currentUser?.role) ? ()=>onDelete(p.id) : null}
+      />)}
     </div>
   </div>;
 }
 
-function ProjectCard({ project, onClick }) {
+function ProjectCard({ project, onClick, onDelete }) {
   const risk = RISK_CFG[project.risk];
   const days = Math.floor((new Date(project.deadline)-new Date())/86400000);
   const [hov, setHov] = useState(false);
@@ -555,7 +571,13 @@ function ProjectCard({ project, onClick }) {
         <Chip color={C.primary}>{project.pref}</Chip>
         <Chip color={C.textMuted}>{project.area} ha</Chip>
       </div>
-      <span style={{ color:C.textMuted, fontSize:13 }}>担当：{project.manager}</span>
+      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+        <span style={{ color:C.textMuted, fontSize:13 }}>担当：{project.manager}</span>
+        {onDelete && <Btn variant="danger" size="sm" onClick={e=>{
+          e.stopPropagation();
+          if(window.confirm(`「${project.name}」を削除してもよいですか？\nこの操作は元に戻せません。`)) onDelete();
+        }}>削除</Btn>}
+      </div>
     </div>
   </div>;
 }
@@ -1693,10 +1715,102 @@ function MonitoringModule() {
 }
 
 // ─── ACCOUNT MODULE ───────────────────────────────────────────────────────────
-function AccountModule({ org }) {
+
+// ─── PROFILE SETTINGS MODAL ───────────────────────────────────────────────────
+function ProfileSettingsModal({ currentUser, onClose, initialTab="profile" }) {
+  const [tab, setTab] = useState(initialTab);
+  const [name, setName] = useState(currentUser?.name||"");
+  const [saved, setSaved] = useState(false);
+  const [oldPw, setOldPw] = useState(""); const [newPw, setNewPw] = useState(""); const [pwMsg, setPwMsg] = useState("");
+
+  const saveName = async () => {
+    if(isConfigured && currentUser?.id) {
+      await supabase.from("profiles").update({ name }).eq("id", currentUser.id);
+    }
+    setSaved(true); setTimeout(()=>setSaved(false), 3000);
+  };
+
+  const changePassword = async () => {
+    if(!newPw || newPw.length < 8) { setPwMsg("パスワードは8文字以上必要です"); return; }
+    if(isConfigured) {
+      const { error } = await supabase.auth.updateUser({ password: newPw });
+      if(error) { setPwMsg("エラー: "+error.message); return; }
+    }
+    setPwMsg("✓ パスワードを変更しました"); setOldPw(""); setNewPw("");
+  };
+
+  return <div style={{ position:"fixed", inset:0, background:"#00000066",
+    display:"flex", alignItems:"center", justifyContent:"center", zIndex:500 }}>
+    <div style={{ background:C.surface, borderRadius:16, width:480,
+      boxShadow:C.shadowMd, overflow:"hidden" }}>
+      <div style={{ padding:"22px 28px", borderBottom:`1px solid ${C.borderLight}`,
+        display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+        <h2 style={{ color:C.text, fontSize:18, fontWeight:700,
+          fontFamily:"'Noto Serif JP',serif" }}>アカウント設定</h2>
+        <Btn variant="ghost" size="sm" onClick={onClose}>✕</Btn>
+      </div>
+      <div style={{ display:"flex", borderBottom:`1px solid ${C.borderLight}` }}>
+        {[["profile","👤 プロフィール"],["password","🔒 パスワード"]].map(([k,v])=>(
+          <button key={k} onClick={()=>setTab(k)} style={{ padding:"12px 22px",
+            background:"none", border:"none", borderBottom:`3px solid ${tab===k?C.primary:"transparent"}`,
+            marginBottom:-2, color:tab===k?C.primary:C.textMuted, cursor:"pointer",
+            fontSize:13, fontWeight:tab===k?700:400, fontFamily:"'Noto Sans JP',sans-serif" }}>{v}</button>
+        ))}
+      </div>
+      <div style={{ padding:28 }}>
+        {tab==="profile" && <>
+          <div style={{ display:"flex", alignItems:"center", gap:16, marginBottom:24 }}>
+            <div style={{ width:64, height:64, borderRadius:"50%",
+              background:`linear-gradient(135deg,${C.primary},${C.blue})`,
+              display:"flex", alignItems:"center", justifyContent:"center",
+              color:C.white, fontWeight:700, fontSize:26 }}>{(name||"?")[0]}</div>
+            <div>
+              <div style={{ color:C.text, fontSize:16, fontWeight:700 }}>{currentUser?.email}</div>
+              <Chip color={ROLE_CFG[currentUser?.role||"pm"].color}
+                bg={ROLE_CFG[currentUser?.role||"pm"].badge} size={11}>
+                {ROLE_CFG[currentUser?.role||"pm"].label}
+              </Chip>
+            </div>
+          </div>
+          <div style={{ marginBottom:16 }}>
+            <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:8 }}>表示名</label>
+            <input value={name} onChange={e=>setName(e.target.value)}
+              style={{ ...INP, fontSize:14 }} />
+          </div>
+          {saved && <div style={{ color:C.mid, fontSize:13, marginBottom:12, fontWeight:700 }}>✓ 保存しました</div>}
+          <Btn onClick={saveName} fullWidth>変更を保存</Btn>
+        </>}
+        {tab==="password" && <>
+          <div style={{ marginBottom:16 }}>
+            <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:8 }}>新しいパスワード</label>
+            <input type="password" value={newPw} onChange={e=>setNewPw(e.target.value)}
+              placeholder="8文字以上" style={{ ...INP, fontSize:14 }} />
+          </div>
+          {pwMsg && <div style={{ fontSize:13, marginBottom:12,
+            color:pwMsg.startsWith("✓")?C.mid:C.red, fontWeight:600 }}>{pwMsg}</div>}
+          <Btn onClick={changePassword} fullWidth>パスワードを変更する</Btn>
+          <p style={{ color:C.textFaint, fontSize:12, marginTop:12, textAlign:"center" }}>
+            ※Supabase経由でパスワードリセットメールも送信できます
+          </p>
+        </>}
+      </div>
+    </div>
+  </div>;
+}
+
+function AccountModule({ org, currentUser }) {
   const [tab,setTab]=useState("team");
   const [inviting,setInviting]=useState(false);
-  const TABS={team:"チームメンバー",roles:"権限・役割",billing:"請求情報"};
+  const isAdmin = ["admin","pm"].includes(currentUser?.role);
+  const plan = PLANS[org?.plan||"starter"];
+  const memberCount = TEAM.length;
+  const atUserLimit = memberCount >= plan.maxUsers;
+  const TABS = {
+    team: "チームメンバー",
+    roles: "権限・役割",
+    billing: "請求情報",
+    ...(isAdmin ? { admin: "🔐 管理者設定" } : {})
+  };
   return <div>
     <h1 style={{ color:C.text,fontFamily:"'Noto Serif JP',serif",
       fontSize:28,fontWeight:700,margin:"0 0 6px" }}>アカウント管理</h1>
@@ -1746,8 +1860,30 @@ function AccountModule({ org }) {
     {tab==="team"&&<div>
       <div style={{ display:"flex",justifyContent:"space-between",
         alignItems:"center",marginBottom:16 }}>
-        <SLabel>チームメンバー ({TEAM.length}名)</SLabel>
-        <Btn onClick={()=>setInviting(!inviting)} icon="➕" size="sm">メンバーを招待</Btn>
+        <div>
+          <SLabel>チームメンバー ({memberCount}名)</SLabel>
+          <div style={{ marginTop:6, display:"flex", alignItems:"center", gap:10 }}>
+            <div style={{ width:160, height:6, background:C.bg, borderRadius:3 }}>
+              <div style={{ height:"100%", borderRadius:3,
+                width:`${Math.min(100,(memberCount/plan.maxUsers)*100)}%`,
+                background: atUserLimit ? C.red : C.primary, transition:"width 0.3s" }}/>
+            </div>
+            <span style={{ fontSize:12, color:atUserLimit?C.red:C.textMuted }}>
+              {memberCount} / {plan.maxUsers===999?"無制限":plan.maxUsers}名
+              {atUserLimit && " — 上限に達しています"}
+            </span>
+          </div>
+        </div>
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:6 }}>
+          {atUserLimit && <div style={{ fontSize:12, color:C.amber, fontWeight:600,
+            background:C.amberLight, padding:"4px 10px", borderRadius:6 }}>
+            プランをアップグレードするとメンバーを追加できます
+          </div>}
+          <Btn onClick={()=>!atUserLimit&&setInviting(!inviting)}
+            icon="➕" size="sm"
+            disabled={atUserLimit}
+            style={{ opacity:atUserLimit?0.5:1 }}>メンバーを招待</Btn>
+        </div>
       </div>
       {inviting&&<Card style={{ marginBottom:16,padding:"18px 20px",
         background:C.light,border:`1px solid ${C.primary}44`,boxShadow:"none" }}>
@@ -1860,6 +1996,89 @@ function AccountModule({ org }) {
         ))}
       </Card>
     </div>}
+    {tab==="admin" && isAdmin && <div>
+      <Card style={{ marginBottom:20, padding:"22px 26px",
+        border:`2px solid ${C.primary}33`, background:C.light }}>
+        <div style={{ color:C.primary, fontWeight:700, fontSize:16,
+          fontFamily:"'Noto Serif JP',serif", marginBottom:8 }}>🔐 管理者ダッシュボード</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14 }}>
+          {[
+            { l:"総メンバー数", v:memberCount, u:"名", c:C.primary },
+            { l:"プロジェクト上限", v:plan.maxProjects===999?"無制限":plan.maxProjects, u:"", c:C.mid },
+            { l:"ユーザー上限", v:plan.maxUsers===999?"無制限":plan.maxUsers, u:"名", c:C.blue },
+          ].map(s=><div key={s.l} style={{ background:C.surface, borderRadius:10,
+            padding:"14px 16px", border:`1px solid ${C.borderLight}` }}>
+            <div style={{ color:C.textMuted, fontSize:11, fontFamily:"'DM Mono',monospace",
+              marginBottom:6 }}>{s.l}</div>
+            <div style={{ color:s.c, fontSize:24, fontWeight:800 }}>
+              {s.v}<span style={{ fontSize:13, opacity:0.7, marginLeft:3 }}>{s.u}</span>
+            </div>
+          </div>)}
+        </div>
+      </Card>
+      <Card style={{ marginBottom:20 }}>
+        <SLabel>メンバー権限管理</SLabel>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead><tr style={{ background:C.bg }}>
+            {["氏名","メールアドレス","現在の役割","操作"].map(h=>(
+              <th key={h} style={{ padding:"10px 18px", textAlign:"left",
+                color:C.textMuted, fontSize:12, fontFamily:"'DM Mono',monospace",
+                borderBottom:`1px solid ${C.border}` }}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {TEAM.map(m=>{
+              const r=ROLE_CFG[m.role];
+              const isSelf = m.email === currentUser?.email;
+              return <tr key={m.id} style={{ borderBottom:`1px solid ${C.borderLight}`,
+                background:isSelf?C.light:"transparent" }}>
+                <td style={{ padding:"12px 18px" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <div style={{ width:32, height:32, borderRadius:"50%",
+                      background:`linear-gradient(135deg,${C.primary},${C.blue})`,
+                      display:"flex", alignItems:"center", justifyContent:"center",
+                      color:C.white, fontWeight:700, fontSize:13 }}>{m.name[0]}</div>
+                    <div>
+                      <div style={{ color:C.text, fontSize:14, fontWeight:600 }}>{m.name}</div>
+                      {isSelf && <span style={{ fontSize:11, color:C.mid }}>あなた</span>}
+                    </div>
+                  </div>
+                </td>
+                <td style={{ padding:"12px 18px", color:C.textMuted, fontSize:13 }}>{m.email}</td>
+                <td style={{ padding:"12px 18px" }}><Chip color={r.color} bg={r.badge}>{r.label}</Chip></td>
+                <td style={{ padding:"12px 18px" }}>
+                  {!isSelf && <div style={{ display:"flex", gap:6 }}>
+                    <select defaultValue={m.role} style={{ ...INP, fontSize:12, padding:"5px 10px" }}>
+                      {Object.entries(ROLE_CFG).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+                    </select>
+                    <Btn variant="danger" size="sm">削除</Btn>
+                  </div>}
+                </td>
+              </tr>;
+            })}
+          </tbody>
+        </table>
+      </Card>
+      <Card>
+        <SLabel>組織設定</SLabel>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+          <div>
+            <label style={{ display:"block", color:C.textMid, fontSize:14,
+              fontWeight:700, marginBottom:8 }}>組織名</label>
+            <input defaultValue={org?.name} style={{ ...INP, fontSize:14 }} />
+          </div>
+          <div>
+            <label style={{ display:"block", color:C.textMid, fontSize:14,
+              fontWeight:700, marginBottom:8 }}>プラン</label>
+            <input value={plan.label} readOnly
+              style={{ ...INP, fontSize:14, background:C.bg, color:C.textMuted }} />
+          </div>
+        </div>
+        <div style={{ marginTop:14 }}>
+          <Btn>組織設定を保存</Btn>
+        </div>
+      </Card>
+    </div>}
   </div>;
 }
 
@@ -1867,27 +2086,29 @@ function AccountModule({ org }) {
 export default function App() {
   const [loggedIn,setLoggedIn]=useState(false);
   const [org,setOrg]=useState(null);
+  const [currentUser,setCurrentUser]=useState(null); // { id, name, email, role }
   const [active,setActive]=useState("dashboard");
   const [selectedProject,setSelectedProject]=useState(null);
   const [projects,setProjects]=useState(INIT_PROJECTS);
   const [showNew,setShowNew]=useState(false);
+  const [showProfile,setShowProfile]=useState(false);
 
   // ── Supabase session persistence ──────────────────────
   useEffect(()=>{
     if(!isConfigured) return;
-    // Check for existing session on page load (stays logged in after refresh)
     supabase.auth.getSession().then(async ({ data:{ session } })=>{
       if(session){
         const { data:profile } = await supabase
           .from("profiles").select("*, organizations(*)")
           .eq("id", session.user.id).single();
         setOrg(profile?.organizations ?? { name:session.user.email, plan:"starter" });
+        setCurrentUser({ id:session.user.id, name:profile?.name||session.user.email,
+          email:session.user.email, role:profile?.role||"pm" });
         setLoggedIn(true);
       }
     });
-    // Listen for sign-out from other tabs
     const { data:{ subscription } } = supabase.auth.onAuthStateChange((event)=>{
-      if(event==="SIGNED_OUT"){ setLoggedIn(false); setOrg(null); }
+      if(event==="SIGNED_OUT"){ setLoggedIn(false); setOrg(null); setCurrentUser(null); }
     });
     return ()=> subscription.unsubscribe();
   },[]);
@@ -1906,34 +2127,48 @@ export default function App() {
     document.head.appendChild(s);
   },[]);
 
-  if(!loggedIn) return <LoginScreen onLogin={({org:o})=>{setOrg(o);setLoggedIn(true);}}/>;
+  if(!loggedIn) return <LoginScreen onLogin={({org:o,user:u})=>{
+    setOrg(o);
+    setCurrentUser(u);
+    setLoggedIn(true);
+  }}/>;
 
   const nav=v=>{setActive(v);if(v!=="project")setSelectedProject(null);};
   const updateProject=u=>{setProjects(p=>p.map(x=>x.id===u.id?u:x));setSelectedProject(u);};
 
   const handleLogout = async () => {
     if(isConfigured) await supabase.auth.signOut();
-    setLoggedIn(false); setOrg(null);
+    setLoggedIn(false); setOrg(null); setCurrentUser(null);
   };
+
+  const handleDeleteProject = (id) => {
+    setProjects(p => p.filter(x => x.id !== id));
+    if(selectedProject?.id === id) { setSelectedProject(null); setActive("dashboard"); }
+  };
+
+  const [profileTab, setProfileTab] = useState("profile");
+  const openProfile = (tab="profile") => { setProfileTab(tab); setShowProfile(true); };
 
   const renderMain=()=>{
     if(active==="project"&&selectedProject)
       return <ProjectDetail project={selectedProject} setActive={setActive} onUpdate={updateProject}/>;
     switch(active){
       case "dashboard":  return <Dashboard projects={projects} setSelectedProject={setSelectedProject}
-        setActive={setActive} onNew={()=>setShowNew(true)}/>;
+        setActive={setActive} onNew={()=>setShowNew(true)}
+        onDelete={handleDeleteProject} currentUser={currentUser}/>;
       case "scoping":    return <ScopingModule/>;
       case "species":    return <SpeciesModule/>;
       case "reports":    return <ReportModule/>;
       case "compliance": return <ComplianceModule/>;
       case "monitoring": return <MonitoringModule/>;
-      case "account":    return <AccountModule org={org}/>;
+      case "account":    return <AccountModule org={org} currentUser={currentUser}/>;
       default: return null;
     }
   };
 
   return <div style={{ background:C.bg, minHeight:"100vh" }}>
-    <Header org={org} onLogout={handleLogout}/>
+    <Header org={org} currentUser={currentUser} onLogout={handleLogout}
+      onOpenProfile={openProfile} setActive={nav}/>
     <div style={{ display:"flex" }}>
       <Sidebar active={active} setActive={nav}/>
       <main style={{ flex:1, padding:"32px 36px",
@@ -1944,5 +2179,7 @@ export default function App() {
     {showNew&&<NewProjectModal
       onSave={np=>{setProjects(p=>[...p,np]);setShowNew(false);}}
       onCancel={()=>setShowNew(false)}/>}
+    {showProfile&&<ProfileSettingsModal currentUser={currentUser}
+      initialTab={profileTab} onClose={()=>setShowProfile(false)}/>}
   </div>;
 }
