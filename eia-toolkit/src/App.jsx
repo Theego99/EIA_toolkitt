@@ -2092,6 +2092,7 @@ export default function App() {
   const [projects,setProjects]=useState(INIT_PROJECTS);
   const [showNew,setShowNew]=useState(false);
   const [showProfile,setShowProfile]=useState(false);
+  const [profileTab, setProfileTab] = useState("profile");
 
   // ── Supabase session persistence ──────────────────────
   useEffect(()=>{
@@ -2146,7 +2147,6 @@ export default function App() {
     if(selectedProject?.id === id) { setSelectedProject(null); setActive("dashboard"); }
   };
 
-  const [profileTab, setProfileTab] = useState("profile");
   const openProfile = (tab="profile") => { setProfileTab(tab); setShowProfile(true); };
 
   const renderMain=()=>{
