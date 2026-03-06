@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { supabase, isConfigured } from "./lib/supabase.js";
 
 // ─── TOKENS ───────────────────────────────────────────────────────────────────
 const C = {
@@ -180,12 +181,62 @@ const EINP = { ...INP, border:`2px solid ${C.primary}55`, background:C.light };
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 function LoginScreen({ onLogin }) {
-  const [idx, setIdx] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const go = () => { setLoading(true); setTimeout(() => { setLoading(false); onLogin(ORGS[idx]); }, 1100); };
+  const [email,    setEmail]    = useState("");
+  const [password, setPassword] = useState("");
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState("");
+  const [resetSent,setResetSent]= useState(false);
+
+  const go = async () => {
+    if (!email.trim() || !password.trim()) {
+      setError("メールアドレスとパスワードを入力してください"); return;
+    }
+    setLoading(true); setError("");
+
+    // ── Real Supabase login ──────────────────────────────
+    if (isConfigured) {
+      const { data, error: authErr } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (authErr) {
+        setError("メールアドレスまたはパスワードが正しくありません");
+        setLoading(false); return;
+      }
+      // Fetch the user's profile + org
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("*, organizations(*)")
+        .eq("id", data.user.id)
+        .single();
+      setLoading(false);
+      onLogin({
+        user: data.user,
+        profile,
+        org: profile?.organizations ?? { name: data.user.email, plan: "starter" },
+      });
+      return;
+    }
+
+    // ── Demo fallback (no Supabase configured) ───────────
+    setTimeout(() => {
+      setLoading(false);
+      onLogin({ user: null, profile: null, org: ORGS[0] });
+    }, 900);
+  };
+
+  const resetPassword = async () => {
+    if (!email.trim()) { setError("パスワードリセットにはメールアドレスが必要です"); return; }
+    await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: window.location.origin + "/?reset=1",
+    });
+    setResetSent(true);
+  };
+
   return <div style={{ minHeight:"100vh", background:C.bg, display:"flex",
     alignItems:"center", justifyContent:"center" }}>
     <div style={{ width:460 }}>
+      {/* Logo */}
       <div style={{ textAlign:"center", marginBottom:32 }}>
         <div style={{ display:"inline-flex", alignItems:"center", gap:14,
           background:C.surface, border:`1px solid ${C.border}`,
@@ -201,42 +252,86 @@ function LoginScreen({ onLogin }) {
           </div>
         </div>
       </div>
+
       <Card style={{ padding:36 }}>
         <h2 style={{ color:C.text, fontSize:22, fontWeight:700, marginBottom:6,
           fontFamily:"'Noto Serif JP',serif" }}>ログイン</h2>
         <p style={{ color:C.textMuted, fontSize:14, marginBottom:28 }}>
-          組織アカウントを選択してサインインしてください
+          {isConfigured ? "アカウント情報を入力してください" : "デモモードで実行中"}
         </p>
+
+        {/* Demo mode banner */}
+        {!isConfigured && (
+          <div style={{ marginBottom:18, padding:"12px 16px",
+            background:"#FEF3C7", border:"1px solid #F59E0B",
+            borderRadius:10, fontSize:13, color:"#92400E" }}>
+            ⚠️ Supabase未設定 — デモモードで動作しています。データは保存されません。
+          </div>
+        )}
+
+        {/* Error */}
+        {error && (
+          <div style={{ marginBottom:18, padding:"12px 16px",
+            background:C.redLight, border:`1px solid ${C.red}44`,
+            borderRadius:10, fontSize:13, color:C.red }}>
+            {error}
+          </div>
+        )}
+
+        {/* Reset sent */}
+        {resetSent && (
+          <div style={{ marginBottom:18, padding:"12px 16px",
+            background:C.light, border:`1px solid ${C.primary}44`,
+            borderRadius:10, fontSize:13, color:C.primary }}>
+            ✓ パスワードリセットメールを送信しました。メールをご確認ください。
+          </div>
+        )}
+
+        {/* Email */}
         <div style={{ marginBottom:18 }}>
           <label style={{ display:"block", color:C.textMid, fontSize:15,
-            fontWeight:700, marginBottom:8 }}>所属組織</label>
-          <select value={idx} onChange={e=>setIdx(+e.target.value)} style={{ ...INP, fontSize:15 }}>
-            {ORGS.map((o,i) => <option key={o.id} value={i}>{o.name}</option>)}
-          </select>
-          <div style={{ marginTop:8, padding:"10px 14px", background:C.light,
-            borderRadius:8, display:"flex", gap:10, alignItems:"center" }}>
-            <Chip color={C.primary}>{PLANS[ORGS[idx].plan].label}プラン</Chip>
-            <span style={{ color:C.textMuted, fontSize:13 }}>
-              {ORGS[idx].users}名 · {ORGS[idx].projects}件
-            </span>
-          </div>
+            fontWeight:700, marginBottom:8 }}>メールアドレス</label>
+          <input
+            type="email"
+            value={email}
+            onChange={e=>setEmail(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&go()}
+            placeholder="you@company.jp"
+            autoComplete="email"
+            style={{ ...INP, fontSize:15 }}
+          />
         </div>
-        {[{l:"メールアドレス",v:"tanaka@company.jp"},{l:"パスワード",v:"••••••••",t:"password"}].map(f=>(
-          <div key={f.l} style={{ marginBottom:18 }}>
-            <label style={{ display:"block", color:C.textMid, fontSize:15,
-              fontWeight:700, marginBottom:8 }}>{f.l}</label>
-            <input type={f.t||"text"} defaultValue={f.v} style={{ ...INP, fontSize:15 }} />
-          </div>
-        ))}
+
+        {/* Password */}
+        <div style={{ marginBottom:8 }}>
+          <label style={{ display:"block", color:C.textMid, fontSize:15,
+            fontWeight:700, marginBottom:8 }}>パスワード</label>
+          <input
+            type="password"
+            value={password}
+            onChange={e=>setPassword(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&go()}
+            placeholder="••••••••"
+            autoComplete="current-password"
+            style={{ ...INP, fontSize:15 }}
+          />
+        </div>
+
         <div style={{ textAlign:"right", marginBottom:24 }}>
-          <span style={{ color:C.mid, fontSize:14, cursor:"pointer", fontWeight:600 }}>
+          <span onClick={resetPassword}
+            style={{ color:C.mid, fontSize:14, cursor:"pointer", fontWeight:600 }}>
             パスワードを忘れた方
           </span>
         </div>
+
         <Btn onClick={go} fullWidth size="lg" disabled={loading}>
           {loading ? "ログイン中..." : "ログイン →"}
         </Btn>
       </Card>
+
+      <p style={{ textAlign:"center", marginTop:20, color:C.textFaint, fontSize:13 }}>
+        アカウントをお持ちでない方は管理者にお問い合わせください
+      </p>
     </div>
   </div>;
 }
@@ -1777,6 +1872,26 @@ export default function App() {
   const [projects,setProjects]=useState(INIT_PROJECTS);
   const [showNew,setShowNew]=useState(false);
 
+  // ── Supabase session persistence ──────────────────────
+  useEffect(()=>{
+    if(!isConfigured) return;
+    // Check for existing session on page load (stays logged in after refresh)
+    supabase.auth.getSession().then(async ({ data:{ session } })=>{
+      if(session){
+        const { data:profile } = await supabase
+          .from("profiles").select("*, organizations(*)")
+          .eq("id", session.user.id).single();
+        setOrg(profile?.organizations ?? { name:session.user.email, plan:"starter" });
+        setLoggedIn(true);
+      }
+    });
+    // Listen for sign-out from other tabs
+    const { data:{ subscription } } = supabase.auth.onAuthStateChange((event)=>{
+      if(event==="SIGNED_OUT"){ setLoggedIn(false); setOrg(null); }
+    });
+    return ()=> subscription.unsubscribe();
+  },[]);
+
   useEffect(()=>{
     const s=document.createElement("style");
     s.textContent=`
@@ -1791,10 +1906,15 @@ export default function App() {
     document.head.appendChild(s);
   },[]);
 
-  if(!loggedIn) return <LoginScreen onLogin={o=>{setOrg(o);setLoggedIn(true);}}/>;
+  if(!loggedIn) return <LoginScreen onLogin={({org:o})=>{setOrg(o);setLoggedIn(true);}}/>;
 
   const nav=v=>{setActive(v);if(v!=="project")setSelectedProject(null);};
   const updateProject=u=>{setProjects(p=>p.map(x=>x.id===u.id?u:x));setSelectedProject(u);};
+
+  const handleLogout = async () => {
+    if(isConfigured) await supabase.auth.signOut();
+    setLoggedIn(false); setOrg(null);
+  };
 
   const renderMain=()=>{
     if(active==="project"&&selectedProject)
@@ -1813,7 +1933,7 @@ export default function App() {
   };
 
   return <div style={{ background:C.bg, minHeight:"100vh" }}>
-    <Header org={org} onLogout={()=>setLoggedIn(false)}/>
+    <Header org={org} onLogout={handleLogout}/>
     <div style={{ display:"flex" }}>
       <Sidebar active={active} setActive={nav}/>
       <main style={{ flex:1, padding:"32px 36px",
