@@ -74,6 +74,104 @@ const RISK_CFG = {
 
 const BLANK_SPECIES = { name:"", latin:"", type:"植物", status:"LC", protected:false, count:1, location:"", date:"", notes:"" };
 
+
+// ── BUILT-IN SURVEY TYPE TEMPLATES ────────────────────────────────────────────
+// These are the default task sets for different 環境調査 types.
+// Users can customize and save their own templates on top of these.
+const SURVEY_TYPES = [
+  { id:"bio",    label:"生物調査",       icon:"🌿", color:"#1B4332" },
+  { id:"noise",  label:"騒音・振動調査", icon:"🔊", color:"#7C3AED" },
+  { id:"asb",    label:"アスベスト調査", icon:"⚠️", color:"#DC2626" },
+  { id:"river",  label:"河川調査",       icon:"🌊", color:"#0369A1" },
+  { id:"soil",   label:"土壌汚染調査",   icon:"🏔️", color:"#92400E" },
+  { id:"air",    label:"大気質調査",     icon:"💨", color:"#0891B2" },
+  { id:"eco",    label:"生態系調査",     icon:"🦋", color:"#059669" },
+  { id:"custom", label:"カスタム",       icon:"⚙️", color:"#6B7280" },
+];
+
+const TEMPLATE_TASKS = {
+  bio: {
+    1: ["事業の目的・内容・規模の整理","対象地域の地形・土地利用の把握","生息地感度スクリーニング（デスクトップ調査）","配慮書（生物多様性章）の作成","主務大臣への配慮書提出"],
+    2: ["調査対象種群の選定（環境省指針に基づく）","調査手法・調査時期・調査地点の設計","方法書の公告・縦覧（30日間）","住民・行政からの意見収集","方法書の最終確定・主務大臣提出"],
+    3: ["春季調査の実施（植物・鳥類繁殖期）","夏季調査の実施（昆虫・両生類）","秋季調査の実施（哺乳類・植物結実期）","冬季調査の実施（越冬鳥類・魚類）","全確認種のデータ整理・同定確認"],
+    4: ["調査データの集計・解析","レッドリスト照合・保護種フラグ付け","環境影響予測・影響マトリクス作成","保全措置の検討","準備書（生物多様性章）の作成・提出"],
+    5: ["準備書の公告・縦覧（30日間）","住民説明会の開催","寄せられた意見の整理・回答書作成","主務大臣・都道府県知事への意見回答提出"],
+    6: ["評価書（生物多様性章）の最終作成","第三者専門家による査読・確認","許認可機関への評価書正式提出","評価書の公告・縦覧（30日間）"],
+    7: ["工事中モニタリング計画の策定","工事中モニタリング調査の実施","供用後モニタリング調査の実施（年1回）","モニタリング報告書の作成・提出"],
+  },
+  noise: {
+    1: ["事業概要・発生源の整理","現地踏査・測定地点候補の選定","既存騒音・振動データの収集","配慮書（騒音・振動章）の作成","主務大臣への配慮書提出"],
+    2: ["JIS Z 8731に基づく測定計画の策定","敏感受容体（学校・病院・住宅）のリストアップ","測定機材の選定・キャリブレーション計画","方法書の公告・縦覧（30日間）","方法書の最終確定・提出"],
+    3: ["昼間・夜間・早朝の現地騒音測定","工事機械・交通騒音の発生源測定","振動レベル測定（鉛直方向）","暗騒音・バックグラウンドの測定","測定データの整理・QC"],
+    4: ["騒音・振動の影響予測計算（音源モデリング）","環境基準との比較評価","振動感覚閾値・規制基準との照合","防音壁・振動対策の検討","準備書（騒音・振動章）の作成"],
+    5: ["準備書の公告・縦覧","住民説明会の実施","苦情・意見への対応","意見回答書の提出"],
+    6: ["評価書の最終作成","専門家査読","評価書の正式提出","縦覧・公告"],
+    7: ["工事中騒音モニタリング","苦情対応記録の管理","供用後モニタリング","年次報告書の作成・提出"],
+  },
+  asb: {
+    1: ["建物・施設の使用年代・建材の予備調査","石綿含有建材使用図面の収集","石綿分析機関の選定","事前調査計画書の作成","所轄労働基準監督署への事前届出（大気汚染防止法）"],
+    2: ["石綿含有建材の目視・書面調査","サンプリング地点の選定","位相差顕微鏡・電子顕微鏡分析計画","分析方法書の作成","調査前の安全衛生計画"],
+    3: ["1次調査：目視・書面による石綿使用状況確認","2次調査：サンプリング・分析（フリアブル/非フリアブル）","レベル1（吹付け）・レベル2（保温材）・レベル3（床材等）の区分","石綿含有建材の数量・状態の記録","飛散性リスクの評価"],
+    4: ["石綿含有材料の総量集計","飛散リスクレベルの評価（高・中・低）","除去・封じ込め・囲い込み工法の比較検討","除去費用概算の算定","石綿事前調査結果報告書の作成（大防法・石石綿則）"],
+    5: ["報告書の行政提出（都道府県・市区町村）","建築物解体等作業の事前届出（石石綿則第5条）","住民・関係者への説明","意見・質問への回答"],
+    6: ["最終報告書の作成","石綿含有建材調査者署名・捺印","解体施工者への引継ぎ資料の整備","台帳・記録の保管計画"],
+    7: ["解体工事中の空気中石綿濃度モニタリング","作業記録・廃棄物マニフェストの管理","最終クリアランス検査","記録の30年保管"],
+  },
+  river: {
+    1: ["流域・集水域の地形・地質情報の収集","既存河川データ（水量・水質・生物）の整理","利水・治水の現状把握","配慮書（水環境章）の作成","所管河川管理者への事前協議"],
+    2: ["調査断面・採水地点の設計","魚類・底生生物・付着藻類の調査手法選定","水質測定項目の選定（環境省河川水質測定指針準拠）","流量測定方法の決定","方法書の確定・提出"],
+    3: ["水質測定（BOD・COD・SS・重金属等）","流量・流速測定","魚類電気ショッカー調査または投網調査","底生生物（ベントス）のサーバー網採取","付着藻類・植物プランクトンの採取・同定","河岸植生調査"],
+    4: ["水質データの環境基準（類型）との照合","魚類・底生生物の種組成・多様性指数の算出","河川生態系の健全度評価","事業による流況変化・水質影響の予測","保全措置の検討"],
+    5: ["準備書（水環境章）の公告・縦覧","漁業協同組合・水利権者への説明","意見収集・回答","準備書の最終確定・提出"],
+    6: ["評価書の最終作成","専門家・行政機関査読","正式提出・公告","縦覧対応"],
+    7: ["工事中水質モニタリング（月1回）","濁水・土砂流出の監視","魚類等生息状況の追跡調査（年1回）","事後調査報告書の作成・提出"],
+  },
+  soil: {
+    1: ["土地利用履歴調査（土対法・ASTM Phase I相当）","地質・水文地質情報の収集","汚染リスクのある物質・施設の特定","概況調査計画書の作成","都道府県知事への調査開始届出（土対法）"],
+    2: ["サンプリング地点の設計（グリッドサンプリング）","分析項目の選定（土対法特定有害物質25種）","地下水モニタリング計画","調査機関の選定（土対法指定調査機関）","方法書の確定"],
+    3: ["ボーリング調査・土壌サンプリング","地下水サンプリング（観測井設置）","土壌ガス調査（VOC）","分析機関への試料送付","分析結果の受領・QC確認"],
+    4: ["土壌・地下水の溶出量基準・含有量基準との照合","汚染状況の3次元マッピング","健康リスク評価（暴露経路分析）","浄化対策工法の比較検討（コスト・期間・効果）","調査報告書の作成"],
+    5: ["土地利用制限・指定区域の指定申請","周辺住民・地権者への説明","行政窓口との協議","意見への対応"],
+    6: ["土地汚染状況調査結果報告書の正式提出","形質変更時要届出区域または要措置区域の指定対応","浄化措置計画書の作成・提出","認可申請"],
+    7: ["浄化工事中のモニタリング","地下水のポストモニタリング（四半期ごと）","浄化完了確認調査","土壌汚染台帳の更新手続き"],
+  },
+  air: {
+    1: ["気象・大気拡散条件の予備調査","排出源・排出物質の特定","周辺の大気環境基準適用地域の確認","配慮書（大気質章）の作成","行政事前協議"],
+    2: ["大気質測定計画の策定（環境省大気汚染常時監視マニュアル準拠）","測定地点の選定（排出源の風上・風下）","測定物質の選定（NO2・SPM・PM2.5・VOC等）","測定機器の選定・キャリブレーション計画","方法書の確定"],
+    3: ["大気質の現地測定（季節別・年4回）","気象観測（風向・風速・日射量・気温）","粉じん・飛散物質の測定","悪臭調査（嗅覚測定法）","測定データの整理・QC"],
+    4: ["大気拡散モデルによる影響予測（METI-LIS等）","環境基準・排出基準との照合","健康リスク評価","低減措置（高煙突・脱硫・脱硝装置等）の検討","準備書（大気質章）の作成"],
+    5: ["準備書の公告・縦覧","住民説明会","意見収集・回答書","提出"],
+    6: ["評価書の最終作成","専門家査読","正式提出","公告・縦覧"],
+    7: ["工事中粉じんモニタリング","供用後大気質モニタリング（年1回）","排出基準遵守状況の確認","年次報告書の作成"],
+  },
+  eco: {
+    1: ["広域生態系・緑地ネットワークの情報収集","重要生態系（JNBPA・OECMエリア等）の確認","TNFD LEAPアプローチによる自然関連リスクの予備評価","配慮書の作成","主務大臣への提出"],
+    2: ["生態系調査手法（景観生態学・植生調査）の設計","キーストーン種・指標種の選定","生態系サービスの評価指標の設定","方法書の確定","公告・縦覧"],
+    3: ["植生詳細調査（コドラート法・ライントランセクト法）","鳥類・哺乳類の行動圏・移動経路調査","昆虫類（送粉者・分解者）の多様性調査","土壌・水文環境の調査","生態系機能評価（一次生産量・分解速度等）"],
+    4: ["生態系タイプ別の影響マトリクス作成","生態系サービスへの影響定量化","生物多様性オフセット・NbSの検討","TNFDレポーティング指標の算出","準備書の作成"],
+    5: ["公告・縦覧","自然保護団体・専門家への説明","意見収集・回答","提出"],
+    6: ["評価書の最終作成","TNFD整合レポートの作成","正式提出","公告"],
+    7: ["生態系モニタリング計画の実施","生態系サービスの継続評価","年次TNFDレポートの作成","修復成果の検証"],
+  },
+};
+
+function makeTasksFromLabels(labels) {
+  return labels.map((label, i) => ({
+    id: `t${Date.now()}_${i}`,
+    label,
+    done: false,
+  }));
+}
+
+function makeTasksForSurveyType(surveyType) {
+  const base = TEMPLATE_TASKS[surveyType] || TEMPLATE_TASKS.bio;
+  const result = {};
+  for (let s = 1; s <= 7; s++) {
+    result[s] = makeTasksFromLabels(base[s] || base[1]);
+  }
+  return result;
+}
+
 const makeInitialTasks = (stage) => ({
   1: [
     { id:"1a", label:"事業の目的・内容・規模の整理",                    done:true  },
@@ -583,7 +681,7 @@ function ProjectCard({ project, onClick, onDelete }) {
 }
 
 // ─── PROJECT DETAIL ───────────────────────────────────────────────────────────
-function ProjectDetail({ project: initProject, setActive, onUpdate }) {
+function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTemplate }) {
   const [project, setProject] = useState(initProject);
   const [tab, setTab] = useState("work"); // work | info | species | documents
   const [editingInfo, setEditingInfo] = useState(false);
@@ -598,6 +696,7 @@ function ProjectDetail({ project: initProject, setActive, onUpdate }) {
   const [reportDone, setReportDone] = useState(false);
   const [reportProg, setReportProg] = useState(0);
   const [reportRunning, setReportRunning] = useState(false);
+  const [editingTasksStage, setEditingTasksStage] = useState(null); // null | stageId
 
   const cur = STAGES.find(s=>s.id===project.stage);
   const stageTasks = project.tasks[project.stage] || [];
@@ -816,7 +915,12 @@ function ProjectDetail({ project: initProject, setActive, onUpdate }) {
 
         {/* Task checklist */}
         <Card style={{ marginBottom:20 }}>
-          <SLabel>この段階のタスクチェックリスト</SLabel>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+            <SLabel style={{ margin:0 }}>この段階のタスクチェックリスト</SLabel>
+            <Btn variant="ghost" size="sm" onClick={()=>setEditingTasksStage(project.stage)}>
+              ✏️ タスクを編集
+            </Btn>
+          </div>
           {stageTasks.map(task => <div key={task.id}
             style={{ display:"flex", alignItems:"center", gap:14,
               padding:"13px 0", borderBottom:`1px solid ${C.borderLight}`,
@@ -1339,9 +1443,236 @@ function ProjectDetail({ project: initProject, setActive, onUpdate }) {
 }
 
 // ─── NEW PROJECT MODAL ────────────────────────────────────────────────────────
-function NewProjectModal({ onSave, onCancel }) {
+
+// ── OFFLINE STATUS BAR ────────────────────────────────────────────────────────
+function OfflineBar({ isOnline, pendingCount, syncing }) {
+  if (isOnline && pendingCount === 0) return null;
+  return <div style={{
+    position:"fixed", bottom:0, left:0, right:0, zIndex:999,
+    background: isOnline ? C.primary : "#92400E",
+    color:C.white, padding:"10px 24px",
+    display:"flex", alignItems:"center", justifyContent:"space-between",
+    fontSize:13, fontWeight:600, boxShadow:"0 -2px 12px #0003",
+  }}>
+    <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+      <div style={{ width:8, height:8, borderRadius:"50%",
+        background: isOnline ? "#86EFAC" : "#FCA5A5",
+        animation: !isOnline ? "pulse 1.5s infinite" : "none" }}/>
+      {isOnline
+        ? syncing
+          ? `☁️ オンライン — ${pendingCount}件の変更を同期中...`
+          : `✅ オンライン — すべての変更が同期済みです`
+        : `📵 オフライン — ${pendingCount}件の変更をローカル保存中。接続回復後に自動同期します。`
+      }
+    </div>
+    {isOnline && pendingCount > 0 && !syncing && (
+      <span style={{ opacity:0.8, fontSize:12 }}>自動同期待機中...</span>
+    )}
+  </div>;
+}
+
+// ── TASK EDITOR MODAL ─────────────────────────────────────────────────────────
+// Allows editing tasks for any stage, and saving as a named template.
+function TaskEditorModal({ project, stageId, onSave, onClose, onSaveTemplate }) {
+  const stage = STAGES.find(s => s.id === stageId);
+  const [tasks, setTasks] = useState(
+    (project.tasks[stageId] || []).map(t => ({ ...t }))
+  );
+  const [newLabel, setNewLabel] = useState("");
+  const [templateName, setTemplateName] = useState("");
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const addTask = () => {
+    if (!newLabel.trim()) return;
+    setTasks(t => [...t, { id:`custom_${Date.now()}`, label:newLabel.trim(), done:false }]);
+    setNewLabel("");
+  };
+
+  const removeTask = (id) => setTasks(t => t.filter(x => x.id !== id));
+
+  const moveTask = (idx, dir) => {
+    const arr = [...tasks];
+    const target = idx + dir;
+    if (target < 0 || target >= arr.length) return;
+    [arr[idx], arr[target]] = [arr[target], arr[idx]];
+    setTasks(arr);
+  };
+
+  const handleSave = () => {
+    onSave(stageId, tasks);
+    setSaved(true);
+    setTimeout(() => { setSaved(false); onClose(); }, 800);
+  };
+
+  const handleSaveTemplate = () => {
+    if (!templateName.trim()) return;
+    onSaveTemplate({
+      id: `tmpl_${Date.now()}`,
+      name: templateName.trim(),
+      surveyType: project.surveyType || "custom",
+      stageId,
+      tasks: tasks.map(t => ({ ...t, done:false })),
+      createdAt: new Date().toISOString(),
+    });
+    setShowSaveTemplate(false);
+    setTemplateName("");
+  };
+
+  return <div style={{ position:"fixed", inset:0, background:"#00000077",
+    display:"flex", alignItems:"center", justifyContent:"center", zIndex:600 }}>
+    <div style={{ background:C.surface, borderRadius:16, width:560,
+      maxHeight:"85vh", display:"flex", flexDirection:"column",
+      boxShadow:C.shadowMd, overflow:"hidden" }}>
+
+      {/* Header */}
+      <div style={{ padding:"20px 24px", borderBottom:`1px solid ${C.borderLight}`,
+        background:`linear-gradient(135deg,${stage?.color||C.primary}11,${C.surface})` }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <div>
+            <div style={{ color:stage?.color||C.primary, fontSize:13,
+              fontFamily:"'DM Mono',monospace", fontWeight:700, marginBottom:4 }}>
+              第{stageId}段階 — タスク編集
+            </div>
+            <h3 style={{ color:C.text, fontSize:17, fontWeight:700,
+              fontFamily:"'Noto Serif JP',serif" }}>{stage?.label}</h3>
+          </div>
+          <Btn variant="ghost" size="sm" onClick={onClose}>✕</Btn>
+        </div>
+      </div>
+
+      {/* Task list */}
+      <div style={{ flex:1, overflowY:"auto", padding:"16px 24px" }}>
+        {tasks.length === 0 && (
+          <div style={{ color:C.textFaint, fontSize:13, textAlign:"center",
+            padding:"24px 0" }}>タスクがありません。下から追加してください。</div>
+        )}
+        {tasks.map((task, idx) => (
+          <div key={task.id} style={{ display:"flex", alignItems:"center", gap:10,
+            padding:"10px 12px", background:C.bg, borderRadius:8, marginBottom:8,
+            border:`1px solid ${C.borderLight}` }}>
+            <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
+              <button onClick={()=>moveTask(idx,-1)} disabled={idx===0}
+                style={{ background:"none", border:"none", cursor:"pointer",
+                  color:idx===0?C.textFaint:C.textMuted, fontSize:11, padding:"1px 4px" }}>▲</button>
+              <button onClick={()=>moveTask(idx,1)} disabled={idx===tasks.length-1}
+                style={{ background:"none", border:"none", cursor:"pointer",
+                  color:idx===tasks.length-1?C.textFaint:C.textMuted, fontSize:11, padding:"1px 4px" }}>▼</button>
+            </div>
+            <span style={{ flex:1, color:C.text, fontSize:13, lineHeight:1.5 }}>{task.label}</span>
+            {task.done && <Chip color={C.mid} bg={C.light} size={10}>完了済</Chip>}
+            <button onClick={()=>removeTask(task.id)}
+              style={{ background:"none", border:"none", cursor:"pointer",
+                color:C.textMuted, fontSize:16, padding:"2px 6px",
+                borderRadius:4 }}
+              onMouseEnter={e=>e.currentTarget.style.color=C.red}
+              onMouseLeave={e=>e.currentTarget.style.color=C.textMuted}>✕</button>
+          </div>
+        ))}
+
+        {/* Add task */}
+        <div style={{ display:"flex", gap:8, marginTop:8 }}>
+          <input value={newLabel} onChange={e=>setNewLabel(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&addTask()}
+            placeholder="新しいタスクを入力..."
+            style={{ ...INP, flex:1, fontSize:13 }} />
+          <Btn onClick={addTask} size="sm" disabled={!newLabel.trim()}>追加</Btn>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div style={{ padding:"16px 24px", borderTop:`1px solid ${C.borderLight}`,
+        display:"flex", justifyContent:"space-between", alignItems:"center",
+        background:C.bg }}>
+        <div>
+          {!showSaveTemplate
+            ? <Btn variant="ghost" size="sm" onClick={()=>setShowSaveTemplate(true)}>
+                💾 テンプレートとして保存
+              </Btn>
+            : <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                <input value={templateName} onChange={e=>setTemplateName(e.target.value)}
+                  placeholder="テンプレート名..." onKeyDown={e=>e.key==="Enter"&&handleSaveTemplate()}
+                  style={{ ...INP, fontSize:13, width:200 }} />
+                <Btn size="sm" onClick={handleSaveTemplate} disabled={!templateName.trim()}>保存</Btn>
+                <Btn variant="ghost" size="sm" onClick={()=>setShowSaveTemplate(false)}>取消</Btn>
+              </div>
+          }
+        </div>
+        <div style={{ display:"flex", gap:10 }}>
+          <Btn variant="ghost" onClick={onClose}>取消</Btn>
+          <Btn onClick={handleSave}>
+            {saved ? "✓ 保存しました" : "変更を保存"}
+          </Btn>
+        </div>
+      </div>
+    </div>
+  </div>;
+}
+
+// ── TEMPLATE PICKER ───────────────────────────────────────────────────────────
+// Used when creating a new project — pick a survey type or saved template
+function TemplatePicker({ value, onChange, savedTemplates }) {
+  const [tab, setTab] = useState("builtin"); // builtin | saved
+  return <div>
+    <div style={{ display:"flex", gap:0, marginBottom:12,
+      border:`1px solid ${C.border}`, borderRadius:8, overflow:"hidden" }}>
+      {[["builtin","標準テンプレート"],["saved","保存済み"]].map(([k,v])=>(
+        <button key={k} onClick={()=>setTab(k)} style={{
+          flex:1, padding:"8px", background:tab===k?C.primary:C.surface,
+          border:"none", color:tab===k?C.white:C.textMuted,
+          cursor:"pointer", fontSize:13, fontWeight:tab===k?700:400,
+          fontFamily:"'Noto Sans JP',sans-serif",
+        }}>{v}</button>
+      ))}
+    </div>
+    {tab==="builtin" && <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:8 }}>
+      {SURVEY_TYPES.filter(t=>t.id!=="custom").map(t=>(
+        <div key={t.id} onClick={()=>onChange(t.id)}
+          style={{ padding:"12px 14px", borderRadius:10, cursor:"pointer",
+            border:`2px solid ${value===t.id?t.color:C.borderLight}`,
+            background:value===t.id?`${t.color}11`:C.surface,
+            display:"flex", alignItems:"center", gap:10 }}>
+          <span style={{ fontSize:20 }}>{t.icon}</span>
+          <span style={{ color:value===t.id?t.color:C.text, fontSize:13,
+            fontWeight:value===t.id?700:400 }}>{t.label}</span>
+        </div>
+      ))}
+    </div>}
+    {tab==="saved" && (savedTemplates.length === 0
+      ? <div style={{ color:C.textFaint, fontSize:13, textAlign:"center", padding:"20px 0" }}>
+          保存済みテンプレートはありません
+        </div>
+      : <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+          {savedTemplates.map(t=>(
+            <div key={t.id} onClick={()=>onChange(`saved:${t.id}`)}
+              style={{ padding:"12px 14px", borderRadius:10, cursor:"pointer",
+                border:`2px solid ${value===`saved:${t.id}`?C.primary:C.borderLight}`,
+                background:value===`saved:${t.id}`?C.light:C.surface }}>
+              <div style={{ color:C.text, fontSize:13, fontWeight:700 }}>{t.name}</div>
+              <div style={{ color:C.textMuted, fontSize:12, marginTop:2 }}>
+                {SURVEY_TYPES.find(s=>s.id===t.surveyType)?.label||t.surveyType} · 
+                第{t.stageId}段階 · {t.tasks?.length||0}タスク
+              </div>
+            </div>
+          ))}
+        </div>
+    )}
+  </div>
+  {editingTasksStage !== null && <TaskEditorModal
+    project={project}
+    stageId={editingTasksStage}
+    onSave={(stageId, newTasks) => {
+      const updated = { ...project, tasks: { ...project.tasks, [stageId]: newTasks } };
+      push(updated);
+    }}
+    onSaveTemplate={onSaveTemplate}
+    onClose={()=>setEditingTasksStage(null)}
+  />};
+}
+function NewProjectModal({ onSave, onCancel, savedTemplates=[] }) {
   const [d, setD] = useState({
     name:"", client:"", type:"wind", pref:"東京都",
+    surveyType:"bio",
     deadline:"2027-03-31", area:"", budget:"",
     desc:"", manager:"田中 誠一", risk:"low"
   });
@@ -1429,6 +1760,16 @@ function NewProjectModal({ onSave, onCancel }) {
           style={{ ...INP, fontSize:14, resize:"vertical" }} />
       </div>
 
+      <div style={{ marginBottom:20 }}>
+        <label style={{ display:"block", color:C.textMid, fontSize:15,
+          fontWeight:700, marginBottom:10 }}>調査タイプ・タスクテンプレート *</label>
+        <TemplatePicker
+          value={d.surveyType}
+          onChange={v=>setD({...d,surveyType:v})}
+          savedTemplates={savedTemplates}
+        />
+      </div>
+
       <div style={{ background:C.light, border:`1px solid ${C.primary}33`,
         borderRadius:10, padding:"12px 16px", marginBottom:20 }}>
         <div style={{ color:C.primary, fontSize:13, fontWeight:700, marginBottom:4 }}>
@@ -1438,6 +1779,7 @@ function NewProjectModal({ onSave, onCancel }) {
           プロジェクトが作成されると <strong>第1段階（配慮書手続）</strong> から開始します。
           各段階でタスクをチェックし、全タスク完了後に次の段階へ進めます。
           第3段階（現地調査）では確認種を直接入力できます。
+          <strong style={{ color:C.primary }}> タスクは作成後もいつでも編集できます。</strong>
         </div>
       </div>
 
@@ -2092,7 +2434,11 @@ export default function App() {
   const [projects,setProjects]=useState(INIT_PROJECTS);
   const [showNew,setShowNew]=useState(false);
   const [showProfile,setShowProfile]=useState(false);
-  const [profileTab, setProfileTab] = useState("profile");
+  const [profileTab,setProfileTab]=useState("profile");
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [pendingSync, setPendingSync] = useState(0);
+  const [syncing, setSyncing] = useState(false);
+  const [savedTemplates, setSavedTemplates] = useState([]);
 
   // ── Supabase session persistence ──────────────────────
   useEffect(()=>{
@@ -2112,6 +2458,47 @@ export default function App() {
       if(event==="SIGNED_OUT"){ setLoggedIn(false); setOrg(null); setCurrentUser(null); }
     });
     return ()=> subscription.unsubscribe();
+  },[]);
+
+  // ── Offline detection + sync ───────────────────────────────────────────────
+  useEffect(()=>{
+    // Load templates from IndexedDB on mount
+    getAllTemplates().then(setSavedTemplates).catch(()=>{});
+
+    // Load projects from IndexedDB (works offline)
+    getAllProjectsLocal().then(local => {
+      if(local.length > 0) setProjects(local);
+    }).catch(()=>{});
+
+    // Online/offline listeners
+    const goOnline = async () => {
+      setIsOnline(true);
+      if(!isConfigured) return;
+      // Flush any queued changes
+      const count = await getSyncQueueLength().catch(()=>0);
+      if(count > 0){
+        setSyncing(true);
+        await flushSyncQueue(supabase).catch(()=>{});
+        setSyncing(false);
+        setPendingSync(0);
+      }
+    };
+    const goOffline = () => setIsOnline(false);
+
+    window.addEventListener("online",  goOnline);
+    window.addEventListener("offline", goOffline);
+
+    // Poll pending count every 5s
+    const poll = setInterval(async ()=>{
+      const n = await getSyncQueueLength().catch(()=>0);
+      setPendingSync(n);
+    }, 5000);
+
+    return ()=>{
+      window.removeEventListener("online",  goOnline);
+      window.removeEventListener("offline", goOffline);
+      clearInterval(poll);
+    };
   },[]);
 
   useEffect(()=>{
@@ -2135,7 +2522,49 @@ export default function App() {
   }}/>;
 
   const nav=v=>{setActive(v);if(v!=="project")setSelectedProject(null);};
-  const updateProject=u=>{setProjects(p=>p.map(x=>x.id===u.id?u:x));setSelectedProject(u);};
+  const updateProject=async (u)=>{
+    setProjects(p=>p.map(x=>x.id===u.id?u:x));
+    setSelectedProject(u);
+    // Save locally always
+    await saveProjectLocal(u).catch(()=>{});
+    // Queue for server sync
+    if(isConfigured){
+      if(isOnline){
+        await supabase.from("projects").upsert({
+          id:u.id, name:u.name, client:u.client, type:u.type,
+          stage:u.stage, pref:u.pref, deadline:u.deadline, area:u.area,
+          budget:u.budget, description:u.desc, manager:u.manager,
+          risk:u.risk, progress:u.progress, red_list_count:u.redListCount,
+          tasks:u.tasks, organization_id:org?.id,
+        }).catch(()=>{});
+      } else {
+        await enqueue("projects","upsert",{
+          id:u.id, name:u.name, client:u.client, type:u.type,
+          stage:u.stage, pref:u.pref, tasks:u.tasks, progress:u.progress,
+        }).catch(()=>{});
+        setPendingSync(n=>n+1);
+      }
+    }
+  };
+
+  const handleDeleteProject = async (id) => {
+    setProjects(p => p.filter(x => x.id !== id));
+    if(selectedProject?.id === id){ setSelectedProject(null); setActive("dashboard"); }
+    await deleteProjectLocal(id).catch(()=>{});
+    if(isConfigured){
+      if(isOnline){
+        await supabase.from("projects").delete().eq("id",id).catch(()=>{});
+      } else {
+        await enqueue("projects","delete",{id}).catch(()=>{});
+        setPendingSync(n=>n+1);
+      }
+    }
+  };
+
+  const handleSaveTemplate = async (tmpl) => {
+    await saveTemplate(tmpl).catch(()=>{});
+    setSavedTemplates(await getAllTemplates().catch(()=>[]));
+  };
 
   const handleLogout = async () => {
     if(isConfigured) await supabase.auth.signOut();
@@ -2147,11 +2576,12 @@ export default function App() {
     if(selectedProject?.id === id) { setSelectedProject(null); setActive("dashboard"); }
   };
 
+  const [profileTab, setProfileTab] = useState("profile");
   const openProfile = (tab="profile") => { setProfileTab(tab); setShowProfile(true); };
 
   const renderMain=()=>{
     if(active==="project"&&selectedProject)
-      return <ProjectDetail project={selectedProject} setActive={setActive} onUpdate={updateProject}/>;
+      return <ProjectDetail project={selectedProject} setActive={setActive} onUpdate={updateProject} onSaveTemplate={handleSaveTemplate}/>;
     switch(active){
       case "dashboard":  return <Dashboard projects={projects} setSelectedProject={setSelectedProject}
         setActive={setActive} onNew={()=>setShowNew(true)}
@@ -2177,9 +2607,17 @@ export default function App() {
       </main>
     </div>
     {showNew&&<NewProjectModal
-      onSave={np=>{setProjects(p=>[...p,np]);setShowNew(false);}}
+      savedTemplates={savedTemplates}
+      onSave={np=>{
+        const tasks = makeTasksForSurveyType(np.surveyType||"bio");
+        const full = {...np, tasks, species:[], redListCount:0, progress:0, comments:[], documents:[]};
+        setProjects(p=>[...p,full]);
+        saveProjectLocal(full).catch(()=>{});
+        setShowNew(false);
+      }}
       onCancel={()=>setShowNew(false)}/>}
     {showProfile&&<ProfileSettingsModal currentUser={currentUser}
       initialTab={profileTab} onClose={()=>setShowProfile(false)}/>}
+    <OfflineBar isOnline={isOnline} pendingCount={pendingSync} syncing={syncing}/>
   </div>;
 }
