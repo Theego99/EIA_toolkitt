@@ -1,5 +1,77 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { supabase, isConfigured } from "./lib/supabase.js";
+
+// ── OFFLINE STORE (IndexedDB) ─────────────────────────────────────────────────
+const DB_NAME = "eia-toolkit", DB_VERSION = 2;
+let _db = null;
+async function openDB() {
+  if (_db) return _db;
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains("projects")) db.createObjectStore("projects", { keyPath:"id" });
+      if (!db.objectStoreNames.contains("syncQueue")) {
+        const sq = db.createObjectStore("syncQueue", { keyPath:"qid", autoIncrement:true });
+        sq.createIndex("by_table","table");
+      }
+      if (!db.objectStoreNames.contains("templates")) db.createObjectStore("templates", { keyPath:"id" });
+    };
+    req.onsuccess = e => { _db = e.target.result; res(_db); };
+    req.onerror = () => rej(req.error);
+  });
+}
+async function idbTx(store, mode, fn) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const t = db.transaction(store, mode), s = t.objectStore(store), r = fn(s);
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function idbGetAll(store) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const r = db.transaction(store,"readonly").objectStore(store).getAll();
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function saveProjectLocal(p)      { await idbTx("projects","readwrite", s=>s.put({...p,_updatedAt:Date.now()})); }
+async function getAllProjectsLocal()     { return idbGetAll("projects"); }
+async function deleteProjectLocal(id)   { await idbTx("projects","readwrite", s=>s.delete(id)); }
+async function saveTemplate(t)          { await idbTx("templates","readwrite", s=>s.put({...t,_updatedAt:Date.now()})); }
+async function getAllTemplates()         { return idbGetAll("templates"); }
+async function deleteTemplate(id)       { await idbTx("templates","readwrite", s=>s.delete(id)); }
+async function enqueue(table, op, payload) {
+  const db = await openDB();
+  return new Promise((res,rej) => {
+    const r = db.transaction("syncQueue","readwrite").objectStore("syncQueue")
+      .add({ table, op, payload, timestamp:Date.now(), retries:0 });
+    r.onsuccess = ()=>res(r.result); r.onerror = ()=>rej(r.error);
+  });
+}
+async function getSyncQueueLength() {
+  const db = await openDB();
+  return new Promise((res,rej) => {
+    const r = db.transaction("syncQueue","readonly").objectStore("syncQueue").count();
+    r.onsuccess = ()=>res(r.result); r.onerror = ()=>rej(r.error);
+  });
+}
+async function removeFromQueue(qid) { await idbTx("syncQueue","readwrite", s=>s.delete(qid)); }
+async function flushSyncQueue(sb) {
+  if (!sb || !navigator.onLine) return { synced:0, failed:0 };
+  const queue = await idbGetAll("syncQueue");
+  let synced=0, failed=0;
+  for (const entry of queue) {
+    try {
+      if (entry.table==="projects") {
+        if (entry.op==="upsert") { const {error}=await sb.from("projects").upsert(entry.payload); if(error)throw error; }
+        else if (entry.op==="delete") { const {error}=await sb.from("projects").delete().eq("id",entry.payload.id); if(error)throw error; }
+      }
+      await removeFromQueue(entry.qid); synced++;
+    } catch(e) { console.warn("[Sync] failed",entry.qid,e.message); failed++; }
+  }
+  return { synced, failed };
+}
 
 // ─── TOKENS ───────────────────────────────────────────────────────────────────
 const C = {
@@ -336,7 +408,7 @@ function LoginScreen({ onLogin }) {
 
   return <div style={{ minHeight:"100vh", background:C.bg, display:"flex",
     alignItems:"center", justifyContent:"center" }}>
-    <div style={{ width:460 }}>
+    <div style={{ width:"min(460px, 92vw)" }}>
       {/* Logo */}
       <div style={{ textAlign:"center", marginBottom:32 }}>
         <div style={{ display:"inline-flex", alignItems:"center", gap:14,
@@ -438,8 +510,9 @@ function LoginScreen({ onLogin }) {
 }
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
-function Header({ org, currentUser, onLogout, onOpenProfile, setActive }) {
+function Header({ org, currentUser, onLogout, onOpenProfile, setActive, onMenuOpen }) {
   const [menu, setMenu] = useState(false);
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const role = ROLE_CFG[currentUser?.role||"pm"];
   const initials = (currentUser?.name||"?").slice(0,1);
   return <div style={{ height:64, background:C.surface, borderBottom:`1px solid ${C.border}`,
@@ -456,13 +529,14 @@ function Header({ org, currentUser, onLogout, onOpenProfile, setActive }) {
           fontFamily:"'DM Mono',monospace", letterSpacing:"0.06em" }}>RECORTA</div>
       </div>
     </div>
-    {org && <div style={{ background:C.light, border:`1px solid ${C.primary}33`,
+    {org && !isMobile && <div style={{ background:C.light, border:`1px solid ${C.primary}33`,
       borderRadius:8, padding:"7px 14px", display:"flex", alignItems:"center", gap:8 }}>
       <div style={{ width:8, height:8, borderRadius:"50%", background:C.mid }} />
       <span style={{ color:C.primary, fontSize:14, fontWeight:600 }}>{org.name}</span>
       <Chip color={PLANS[org.plan]?.color||C.primary}>{PLANS[org.plan]?.label}</Chip>
     </div>}
     <div style={{ flex:1 }} />
+    {isMobile && <button onClick={onMenuOpen} style={{ background:"none", border:"none", fontSize:22, cursor:"pointer", color:C.primary, padding:"4px 8px" }}>☰</button>}
     <div style={{ position:"relative" }}>
       <div onClick={()=>setMenu(!menu)} style={{ display:"flex", alignItems:"center",
         gap:10, cursor:"pointer", padding:"7px 12px", borderRadius:8,
@@ -510,7 +584,8 @@ function Header({ org, currentUser, onLogout, onOpenProfile, setActive }) {
 
 
 // ─── SIDEBAR ──────────────────────────────────────────────────────────────────
-function Sidebar({ active, setActive }) {
+function Sidebar({ active, setActive, mobileOpen, onClose }) {
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const nav = [
     { id:"dashboard",  icon:"◉",  label:"ダッシュボード" },
     { id:"scoping",    icon:"⬡",  label:"スコーピング・調査設計" },
@@ -520,11 +595,19 @@ function Sidebar({ active, setActive }) {
     { id:"monitoring", icon:"📊", label:"事後モニタリング" },
     { id:"account",    icon:"🏢", label:"アカウント管理" },
   ];
-  return <div style={{ width:236, background:C.surface, borderRight:`1px solid ${C.border}`,
-    height:"calc(100vh - 64px)", position:"sticky", top:64, flexShrink:0,
-    display:"flex", flexDirection:"column" }}>
+  if (isMobile && !mobileOpen) return null;
+  return <>
+    {isMobile && <div onClick={onClose} style={{ position:"fixed", inset:0, background:"#0005", zIndex:150 }}/>}
+    <div style={{ width:236, background:C.surface, borderRight:`1px solid ${C.border}`,
+      height:"calc(100vh - 64px)",
+      position: isMobile ? "fixed" : "sticky",
+      top:64, left:0, zIndex:isMobile?200:1,
+      flexShrink:0, display:"flex", flexDirection:"column",
+      boxShadow: isMobile ? C.shadowMd : "none",
+      transform: isMobile && !mobileOpen ? "translateX(-100%)" : "translateX(0)",
+      transition:"transform 0.25s ease" }}>
     <nav style={{ flex:1, padding:"14px 0", overflowY:"auto" }}>
-      {nav.map((item,i) => <>
+      {nav.map((item,i) => <React.Fragment key={item.id}>
         {i===6 && <div key="sep" style={{ padding:"14px 20px 6px", color:C.textFaint,
           fontSize:10, fontWeight:700, fontFamily:"'DM Mono',monospace",
           letterSpacing:"0.1em", textTransform:"uppercase" }}>設定</div>}
@@ -540,7 +623,7 @@ function Sidebar({ active, setActive }) {
           <span style={{ fontSize:17, width:22, textAlign:"center" }}>{item.icon}</span>
           {item.label}
         </button>
-      </>)}
+      </React.Fragment>)}
     </nav>
     {/* Mobile sync status - subtle, not promotional */}
     <div style={{ padding:"12px 18px", borderTop:`1px solid ${C.borderLight}`,
@@ -549,11 +632,13 @@ function Sidebar({ active, setActive }) {
         flexShrink:0, boxShadow:"0 0 0 2px #D1FAE5" }} />
       <span style={{ color:C.textFaint, fontSize:11 }}>モバイル同期中</span>
     </div>
-  </div>;
+  </div>
+  </>;
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ projects, setSelectedProject, setActive, onNew, onDelete, currentUser }) {
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const totalSpecies = projects.reduce((a,b) => a + b.species.length, 0);
   const totalRL = projects.reduce((a,b) => a + b.redListCount, 0);
   const urgent = projects.filter(p => Math.floor((new Date(p.deadline)-new Date())/86400000)<60).length;
@@ -568,7 +653,7 @@ function Dashboard({ projects, setSelectedProject, setActive, onNew, onDelete, c
       <Btn onClick={onNew} icon="＋" size="lg">新規プロジェクト</Btn>
     </div>
 
-    <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:28 }}>
+    <div style={{ display:"grid", gridTemplateColumns: isMobile ? "repeat(2,1fr)" : "repeat(4,1fr)", gap:14, marginBottom:28 }}>
       {[
         { l:"進行中",      v:projects.length, u:"件", c:C.primary, bg:C.light },
         { l:"確認種総数",  v:totalSpecies,    u:"種", c:C.blue,   bg:C.blueLight },
@@ -600,7 +685,7 @@ function Dashboard({ projects, setSelectedProject, setActive, onNew, onDelete, c
     </Card>
 
     <SLabel>プロジェクト一覧 ({projects.length}件)</SLabel>
-    <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:16 }}>
+    <div style={{ display:"grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2,1fr)", gap:16 }}>
       {projects.map(p => <ProjectCard key={p.id} project={p}
         onClick={()=>{ setSelectedProject(p); setActive("project"); }}
         onDelete={["admin","pm"].includes(currentUser?.role) ? ()=>onDelete(p.id) : null}
@@ -610,6 +695,7 @@ function Dashboard({ projects, setSelectedProject, setActive, onNew, onDelete, c
 }
 
 function ProjectCard({ project, onClick, onDelete }) {
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const risk = RISK_CFG[project.risk];
   const days = Math.floor((new Date(project.deadline)-new Date())/86400000);
   const [hov, setHov] = useState(false);
@@ -649,7 +735,7 @@ function ProjectCard({ project, onClick, onDelete }) {
         <strong style={{ color:cur?.color }}>次のタスク：</strong>{nextTask.label}
       </span>
     </div>}
-    <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10, marginTop:12 }}>
+    <div style={{ display:"grid", gridTemplateColumns: isMobile ? "repeat(2,1fr)" : "repeat(4,1fr)", gap:10, marginTop:12 }}>
       {[
         { l:"確認種",     v:project.species.length, u:"種", c:C.blue   },
         { l:"RL記載",    v:project.redListCount,   u:"種", c:C.amber  },
@@ -682,6 +768,7 @@ function ProjectCard({ project, onClick, onDelete }) {
 
 // ─── PROJECT DETAIL ───────────────────────────────────────────────────────────
 function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTemplate }) {
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const [project, setProject] = useState(initProject);
   const [tab, setTab] = useState("work"); // work | info | species | documents
   const [editingInfo, setEditingInfo] = useState(false);
@@ -815,7 +902,7 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
 
   return <div>
     {/* Header */}
-    <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:24 }}>
+    <div style={{ display:"flex", alignItems:"center", gap:isMobile?8:14, marginBottom:24, flexWrap:"wrap" }}>
       <Btn onClick={()=>setActive("dashboard")} variant="ghost" size="sm">← 一覧へ</Btn>
       <div style={{ flex:1 }}>
         <h1 style={{ color:C.text, fontFamily:"'Noto Serif JP',serif",
@@ -868,7 +955,7 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
     </Card>
 
     {/* Tabs */}
-    <div style={{ display:"flex", borderBottom:`2px solid ${C.borderLight}`, marginBottom:20 }}>
+    <div style={{ display:"flex", borderBottom:`2px solid ${C.borderLight}`, marginBottom:20, overflowX:"auto", WebkitOverflowScrolling:"touch" }}>
       {TABS.map(t => <button key={t.id} onClick={()=>setTab(t.id)} style={{
         padding:"10px 22px", background:"none", border:"none",
         borderBottom:`3px solid ${tab===t.id?C.primary:"transparent"}`, marginBottom:-2,
@@ -878,7 +965,7 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
     </div>
 
     {/* ── TAB: WORK ── */}
-    {tab==="work" && <div style={{ display:"grid", gridTemplateColumns:"1fr 340px", gap:20 }}>
+    {tab==="work" && <div style={{ display:"grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 340px", gap:20 }}>
       <div>
         {/* Current stage context */}
         <div style={{ background:`${cur?.color}10`, border:`2px solid ${cur?.color}55`,
@@ -1474,6 +1561,7 @@ function OfflineBar({ isOnline, pendingCount, syncing }) {
 // ── TASK EDITOR MODAL ─────────────────────────────────────────────────────────
 // Allows editing tasks for any stage, and saving as a named template.
 function TaskEditorModal({ project, stageId, onSave, onClose, onSaveTemplate }) {
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const stage = STAGES.find(s => s.id === stageId);
   const [tasks, setTasks] = useState(
     (project.tasks[stageId] || []).map(t => ({ ...t }))
@@ -1670,6 +1758,7 @@ function TemplatePicker({ value, onChange, savedTemplates }) {
   />};
 }
 function NewProjectModal({ onSave, onCancel, savedTemplates=[] }) {
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const [d, setD] = useState({
     name:"", client:"", type:"wind", pref:"東京都",
     surveyType:"bio",
@@ -2060,6 +2149,7 @@ function MonitoringModule() {
 
 // ─── PROFILE SETTINGS MODAL ───────────────────────────────────────────────────
 function ProfileSettingsModal({ currentUser, onClose, initialTab="profile" }) {
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const [tab, setTab] = useState(initialTab);
   const [name, setName] = useState(currentUser?.name||"");
   const [saved, setSaved] = useState(false);
@@ -2082,8 +2172,8 @@ function ProfileSettingsModal({ currentUser, onClose, initialTab="profile" }) {
   };
 
   return <div style={{ position:"fixed", inset:0, background:"#00000066",
-    display:"flex", alignItems:"center", justifyContent:"center", zIndex:500 }}>
-    <div style={{ background:C.surface, borderRadius:16, width:480,
+    display:"flex", alignItems:isMobile?"flex-end":"center", justifyContent:"center", zIndex:500 }}>
+    <div style={{ background:C.surface, borderRadius: isMobile?"16px 16px 0 0":16, width:isMobile?"100vw":"min(480px,95vw)",
       boxShadow:C.shadowMd, overflow:"hidden" }}>
       <div style={{ padding:"22px 28px", borderBottom:`1px solid ${C.borderLight}`,
         display:"flex", justifyContent:"space-between", alignItems:"center" }}>
@@ -2141,6 +2231,7 @@ function ProfileSettingsModal({ currentUser, onClose, initialTab="profile" }) {
 }
 
 function AccountModule({ org, currentUser }) {
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const [tab,setTab]=useState("team");
   const [inviting,setInviting]=useState(false);
   const isAdmin = ["admin","pm"].includes(currentUser?.role);
@@ -2304,7 +2395,7 @@ function AccountModule({ org, currentUser }) {
         </Card>;
       })}
     </div>}
-    {tab==="billing"&&<div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:20 }}>
+    {tab==="billing"&&<div style={{ display:"grid", gridTemplateColumns: isMobile?"1fr":"1fr 1fr", gap:20 }}>
       <Card>
         <SLabel>プラン選択</SLabel>
         {Object.entries(PLANS).map(([k,p])=>(
@@ -2343,7 +2434,7 @@ function AccountModule({ org, currentUser }) {
         border:`2px solid ${C.primary}33`, background:C.light }}>
         <div style={{ color:C.primary, fontWeight:700, fontSize:16,
           fontFamily:"'Noto Serif JP',serif", marginBottom:8 }}>🔐 管理者ダッシュボード</div>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14 }}>
+        <div style={{ display:"grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3,1fr)", gap:14 }}>
           {[
             { l:"総メンバー数", v:memberCount, u:"名", c:C.primary },
             { l:"プロジェクト上限", v:plan.maxProjects===999?"無制限":plan.maxProjects, u:"", c:C.mid },
@@ -2439,6 +2530,7 @@ export default function App() {
   const [pendingSync, setPendingSync] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [savedTemplates, setSavedTemplates] = useState([]);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // ── Supabase session persistence ──────────────────────
   useEffect(()=>{
@@ -2515,6 +2607,8 @@ export default function App() {
     document.head.appendChild(s);
   },[]);
 
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
+
   if(!loggedIn) return <LoginScreen onLogin={({org:o,user:u})=>{
     setOrg(o);
     setCurrentUser(u);
@@ -2571,12 +2665,6 @@ export default function App() {
     setLoggedIn(false); setOrg(null); setCurrentUser(null);
   };
 
-  const handleDeleteProject = (id) => {
-    setProjects(p => p.filter(x => x.id !== id));
-    if(selectedProject?.id === id) { setSelectedProject(null); setActive("dashboard"); }
-  };
-
-  const [profileTab, setProfileTab] = useState("profile");
   const openProfile = (tab="profile") => { setProfileTab(tab); setShowProfile(true); };
 
   const renderMain=()=>{
@@ -2598,11 +2686,11 @@ export default function App() {
 
   return <div style={{ background:C.bg, minHeight:"100vh" }}>
     <Header org={org} currentUser={currentUser} onLogout={handleLogout}
-      onOpenProfile={openProfile} setActive={nav}/>
+      onOpenProfile={openProfile} setActive={nav} onMenuOpen={()=>setMobileMenuOpen(true)}/>
     <div style={{ display:"flex" }}>
-      <Sidebar active={active} setActive={nav}/>
-      <main style={{ flex:1, padding:"32px 36px",
-        minHeight:"calc(100vh - 64px)", maxWidth:1300, overflowX:"hidden" }}>
+      <Sidebar active={active} setActive={v=>{nav(v);setMobileMenuOpen(false);}} mobileOpen={mobileMenuOpen} onClose={()=>setMobileMenuOpen(false)}/>
+      <main style={{ flex:1, padding: isMobile ? "16px 14px" : "32px 36px",
+        minHeight:"calc(100vh - 64px)", maxWidth:1300, overflowX:"hidden", width:"100%" }}>
         {renderMain()}
       </main>
     </div>
