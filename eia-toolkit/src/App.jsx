@@ -783,7 +783,8 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
   const [reportDone, setReportDone] = useState(false);
   const [reportProg, setReportProg] = useState(0);
   const [reportRunning, setReportRunning] = useState(false);
-  const [editingTasksStage, setEditingTasksStage] = useState(null); // null | stageId
+  const [editingTasks, setEditingTasks] = useState(false);
+  const projectStages = project.customStages || STAGES;
 
   const cur = STAGES.find(s=>s.id===project.stage);
   const stageTasks = project.tasks[project.stage] || [];
@@ -936,7 +937,7 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
         )}
       </div>
       <div style={{ display:"flex", gap:4 }}>
-        {STAGES.map(s => <div key={s.id} style={{ flex:1 }}>
+        {projectStages.map(s => <div key={s.id} style={{ flex:1 }}>
           <div style={{ background:s.id===project.stage?`${s.color}15`:s.id<project.stage?`${s.color}08`:C.bg,
             border:`${s.id===project.stage?2:1}px solid ${s.id<=project.stage?s.color+(s.id===project.stage?"":"88"):C.borderLight}`,
             borderRadius:10, padding:"10px 4px", textAlign:"center", position:"relative" }}>
@@ -1004,8 +1005,8 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
         <Card style={{ marginBottom:20 }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
             <SLabel style={{ margin:0 }}>この段階のタスクチェックリスト</SLabel>
-            <Btn variant="ghost" size="sm" onClick={()=>setEditingTasksStage(project.stage)}>
-              ✏️ タスクを編集
+            <Btn variant="ghost" size="sm" onClick={()=>setEditingTasks(true)}>
+              ✏️ 全段階を編集
             </Btn>
           </div>
           {stageTasks.map(task => <div key={task.id}
@@ -1560,136 +1561,308 @@ function OfflineBar({ isOnline, pendingCount, syncing }) {
 
 // ── TASK EDITOR MODAL ─────────────────────────────────────────────────────────
 // Allows editing tasks for any stage, and saving as a named template.
-function TaskEditorModal({ project, stageId, onSave, onClose, onSaveTemplate }) {
-  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
-  const stage = STAGES.find(s => s.id === stageId);
-  const [tasks, setTasks] = useState(
-    (project.tasks[stageId] || []).map(t => ({ ...t }))
-  );
-  const [newLabel, setNewLabel] = useState("");
-  const [templateName, setTemplateName] = useState("");
-  const [showSaveTemplate, setShowSaveTemplate] = useState(false);
-  const [saved, setSaved] = useState(false);
+// ── TEMPLATE BUILDER MODAL ────────────────────────────────────────────────────
+// Full project template editor: customize stage names + tasks for all stages,
+// then save as a reusable named template.
+const STAGE_COLORS = ["#059669","#2563EB","#D97706","#7C3AED","#DB2777","#DC2626","#0891B2","#0F766E","#B45309","#6D28D9"];
+const DEFAULT_TEMPLATE_STAGES = () => STAGES.map(s => ({
+  ...s,
+  tasks: [],
+}));
 
-  const addTask = () => {
-    if (!newLabel.trim()) return;
-    setTasks(t => [...t, { id:`custom_${Date.now()}`, label:newLabel.trim(), done:false }]);
-    setNewLabel("");
+function TemplateBuilderModal({ initial, onSave, onClose }) {
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
+  const [name, setName]         = useState(initial?.name || "");
+  const [desc, setDesc]         = useState(initial?.description || "");
+  const [stages, setStages]     = useState(
+    initial?.stages
+      ? initial.stages.map(s => ({ ...s, tasks: (s.tasks||[]).map(t=>({...t})) }))
+      : DEFAULT_TEMPLATE_STAGES()
+  );
+  const [activeStage, setActiveStage] = useState(0); // index into stages
+  const [newTask, setNewTask]   = useState("");
+  const [newStageLabel, setNewStageLabel] = useState("");
+  const [saved, setSaved]       = useState(false);
+
+  const stage = stages[activeStage];
+
+  // ── stage operations ──────────────────────────────────────────────────────
+  const updateStage = (idx, patch) =>
+    setStages(ss => ss.map((s,i) => i===idx ? {...s,...patch} : s));
+
+  const addStage = () => {
+    if (!newStageLabel.trim()) return;
+    const id = stages.length + 1;
+    setStages(ss => [...ss, {
+      id, short: newStageLabel.trim().slice(0,4),
+      label: newStageLabel.trim(),
+      color: STAGE_COLORS[ss.length % STAGE_COLORS.length],
+      tasks: [],
+    }]);
+    setNewStageLabel("");
+    setActiveStage(stages.length);
   };
 
-  const removeTask = (id) => setTasks(t => t.filter(x => x.id !== id));
+  const removeStage = (idx) => {
+    if (stages.length <= 1) return;
+    const next = Math.min(activeStage, stages.length - 2);
+    setStages(ss => ss.filter((_,i)=>i!==idx));
+    setActiveStage(next);
+  };
+
+  const moveStage = (idx, dir) => {
+    const arr = [...stages];
+    const t = idx + dir;
+    if (t < 0 || t >= arr.length) return;
+    [arr[idx], arr[t]] = [arr[t], arr[idx]];
+    setStages(arr);
+    setActiveStage(t);
+  };
+
+  // ── task operations ───────────────────────────────────────────────────────
+  const addTask = () => {
+    if (!newTask.trim()) return;
+    updateStage(activeStage, {
+      tasks: [...(stage.tasks||[]), { id:`t_${Date.now()}`, label:newTask.trim(), done:false }]
+    });
+    setNewTask("");
+  };
+
+  const removeTask = (tid) =>
+    updateStage(activeStage, { tasks: stage.tasks.filter(t=>t.id!==tid) });
 
   const moveTask = (idx, dir) => {
-    const arr = [...tasks];
-    const target = idx + dir;
-    if (target < 0 || target >= arr.length) return;
-    [arr[idx], arr[target]] = [arr[target], arr[idx]];
-    setTasks(arr);
+    const arr = [...stage.tasks];
+    const t = idx + dir;
+    if (t < 0 || t >= arr.length) return;
+    [arr[idx], arr[t]] = [arr[t], arr[idx]];
+    updateStage(activeStage, { tasks: arr });
   };
 
+  const editTaskLabel = (tid, label) =>
+    updateStage(activeStage, { tasks: stage.tasks.map(t => t.id===tid ? {...t,label} : t) });
+
+  // ── save ──────────────────────────────────────────────────────────────────
   const handleSave = () => {
-    onSave(stageId, tasks);
-    setSaved(true);
-    setTimeout(() => { setSaved(false); onClose(); }, 800);
-  };
-
-  const handleSaveTemplate = () => {
-    if (!templateName.trim()) return;
-    onSaveTemplate({
-      id: `tmpl_${Date.now()}`,
-      name: templateName.trim(),
-      surveyType: project.surveyType || "custom",
-      stageId,
-      tasks: tasks.map(t => ({ ...t, done:false })),
-      createdAt: new Date().toISOString(),
+    if (!name.trim()) return;
+    // Renumber stage IDs sequentially
+    const numbered = stages.map((s,i) => ({ ...s, id: i+1 }));
+    onSave({
+      id:    initial?.id || `tmpl_${Date.now()}`,
+      name:  name.trim(),
+      description: desc.trim(),
+      stages: numbered,
+      createdAt: initial?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     });
-    setShowSaveTemplate(false);
-    setTemplateName("");
+    setSaved(true);
+    setTimeout(onClose, 700);
   };
 
-  return <div style={{ position:"fixed", inset:0, background:"#00000077",
-    display:"flex", alignItems:"center", justifyContent:"center", zIndex:600 }}>
-    <div style={{ background:C.surface, borderRadius:16, width:560,
-      maxHeight:"85vh", display:"flex", flexDirection:"column",
-      boxShadow:C.shadowMd, overflow:"hidden" }}>
+  const totalTasks = stages.reduce((n,s)=>n+(s.tasks||[]).length, 0);
 
-      {/* Header */}
-      <div style={{ padding:"20px 24px", borderBottom:`1px solid ${C.borderLight}`,
-        background:`linear-gradient(135deg,${stage?.color||C.primary}11,${C.surface})` }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-          <div>
-            <div style={{ color:stage?.color||C.primary, fontSize:13,
-              fontFamily:"'DM Mono',monospace", fontWeight:700, marginBottom:4 }}>
-              第{stageId}段階 — タスク編集
-            </div>
-            <h3 style={{ color:C.text, fontSize:17, fontWeight:700,
-              fontFamily:"'Noto Serif JP',serif" }}>{stage?.label}</h3>
-          </div>
-          <Btn variant="ghost" size="sm" onClick={onClose}>✕</Btn>
-        </div>
-      </div>
+  return <div style={{ position:"fixed", inset:0, background:"#00000088",
+    display:"flex", alignItems:isMobile?"flex-end":"center",
+    justifyContent:"center", zIndex:700 }}>
+    <div style={{ background:C.surface,
+      borderRadius: isMobile ? "16px 16px 0 0" : 16,
+      width: isMobile ? "100vw" : "min(820px, 96vw)",
+      height: isMobile ? "92vh" : "85vh",
+      display:"flex", flexDirection:"column", boxShadow:C.shadowMd, overflow:"hidden" }}>
 
-      {/* Task list */}
-      <div style={{ flex:1, overflowY:"auto", padding:"16px 24px" }}>
-        {tasks.length === 0 && (
-          <div style={{ color:C.textFaint, fontSize:13, textAlign:"center",
-            padding:"24px 0" }}>タスクがありません。下から追加してください。</div>
-        )}
-        {tasks.map((task, idx) => (
-          <div key={task.id} style={{ display:"flex", alignItems:"center", gap:10,
-            padding:"10px 12px", background:C.bg, borderRadius:8, marginBottom:8,
-            border:`1px solid ${C.borderLight}` }}>
-            <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
-              <button onClick={()=>moveTask(idx,-1)} disabled={idx===0}
-                style={{ background:"none", border:"none", cursor:"pointer",
-                  color:idx===0?C.textFaint:C.textMuted, fontSize:11, padding:"1px 4px" }}>▲</button>
-              <button onClick={()=>moveTask(idx,1)} disabled={idx===tasks.length-1}
-                style={{ background:"none", border:"none", cursor:"pointer",
-                  color:idx===tasks.length-1?C.textFaint:C.textMuted, fontSize:11, padding:"1px 4px" }}>▼</button>
-            </div>
-            <span style={{ flex:1, color:C.text, fontSize:13, lineHeight:1.5 }}>{task.label}</span>
-            {task.done && <Chip color={C.mid} bg={C.light} size={10}>完了済</Chip>}
-            <button onClick={()=>removeTask(task.id)}
-              style={{ background:"none", border:"none", cursor:"pointer",
-                color:C.textMuted, fontSize:16, padding:"2px 6px",
-                borderRadius:4 }}
-              onMouseEnter={e=>e.currentTarget.style.color=C.red}
-              onMouseLeave={e=>e.currentTarget.style.color=C.textMuted}>✕</button>
-          </div>
-        ))}
-
-        {/* Add task */}
-        <div style={{ display:"flex", gap:8, marginTop:8 }}>
-          <input value={newLabel} onChange={e=>setNewLabel(e.target.value)}
-            onKeyDown={e=>e.key==="Enter"&&addTask()}
-            placeholder="新しいタスクを入力..."
-            style={{ ...INP, flex:1, fontSize:13 }} />
-          <Btn onClick={addTask} size="sm" disabled={!newLabel.trim()}>追加</Btn>
-        </div>
-      </div>
-
-      {/* Footer */}
-      <div style={{ padding:"16px 24px", borderTop:`1px solid ${C.borderLight}`,
+      {/* ── Header ── */}
+      <div style={{ padding:"18px 24px", borderBottom:`1px solid ${C.borderLight}`,
         display:"flex", justifyContent:"space-between", alignItems:"center",
-        background:C.bg }}>
+        background:`linear-gradient(135deg,${C.primary}0D,${C.surface})` }}>
         <div>
-          {!showSaveTemplate
-            ? <Btn variant="ghost" size="sm" onClick={()=>setShowSaveTemplate(true)}>
-                💾 テンプレートとして保存
-              </Btn>
-            : <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-                <input value={templateName} onChange={e=>setTemplateName(e.target.value)}
-                  placeholder="テンプレート名..." onKeyDown={e=>e.key==="Enter"&&handleSaveTemplate()}
-                  style={{ ...INP, fontSize:13, width:200 }} />
-                <Btn size="sm" onClick={handleSaveTemplate} disabled={!templateName.trim()}>保存</Btn>
-                <Btn variant="ghost" size="sm" onClick={()=>setShowSaveTemplate(false)}>取消</Btn>
+          <h2 style={{ color:C.text, fontSize:17, fontWeight:700,
+            fontFamily:"'Noto Serif JP',serif", marginBottom:3 }}>
+            {initial ? "テンプレートを編集" : "新規テンプレートを作成"}
+          </h2>
+          <div style={{ color:C.textMuted, fontSize:12 }}>
+            {stages.length}段階 · {totalTasks}タスク合計
+          </div>
+        </div>
+        <Btn variant="ghost" size="sm" onClick={onClose}>✕</Btn>
+      </div>
+
+      {/* ── Template name / desc ── */}
+      <div style={{ padding:"14px 24px", borderBottom:`1px solid ${C.borderLight}`,
+        display:"flex", gap:12, flexWrap:"wrap" }}>
+        <div style={{ flex:2, minWidth:180 }}>
+          <label style={{ display:"block", color:C.textMid, fontSize:12,
+            fontWeight:700, marginBottom:5 }}>テンプレート名 *</label>
+          <input value={name} onChange={e=>setName(e.target.value)}
+            placeholder="例：河川生態系調査（標準）"
+            style={{ ...INP, fontSize:13, width:"100%" }} />
+        </div>
+        <div style={{ flex:3, minWidth:200 }}>
+          <label style={{ display:"block", color:C.textMid, fontSize:12,
+            fontWeight:700, marginBottom:5 }}>説明（任意）</label>
+          <input value={desc} onChange={e=>setDesc(e.target.value)}
+            placeholder="このテンプレートの用途や特徴"
+            style={{ ...INP, fontSize:13, width:"100%" }} />
+        </div>
+      </div>
+
+      {/* ── Main body: stage list (left) + task editor (right) ── */}
+      <div style={{ flex:1, display:"flex", overflow:"hidden", minHeight:0 }}>
+
+        {/* Left: stage list */}
+        <div style={{ width: isMobile ? "100%" : 220, borderRight:`1px solid ${C.borderLight}`,
+          display:"flex", flexDirection:"column", background:C.bg,
+          ...(isMobile ? { display: activeStage === null ? "flex" : "none" } : {}) }}>
+          <div style={{ padding:"10px 12px", borderBottom:`1px solid ${C.borderLight}`,
+            color:C.textMuted, fontSize:11, fontWeight:700,
+            fontFamily:"'DM Mono',monospace", letterSpacing:"0.06em" }}>
+            段階一覧
+          </div>
+          <div style={{ flex:1, overflowY:"auto" }}>
+            {stages.map((s, idx) => (
+              <div key={idx} onClick={()=>setActiveStage(idx)}
+                style={{ padding:"10px 12px", cursor:"pointer",
+                  background: activeStage===idx ? C.surface : "transparent",
+                  borderLeft:`3px solid ${activeStage===idx ? s.color : "transparent"}`,
+                  borderBottom:`1px solid ${C.borderLight}` }}>
+                <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:3 }}>
+                  <div style={{ width:8, height:8, borderRadius:"50%",
+                    background:s.color, flexShrink:0 }}/>
+                  <span style={{ color:activeStage===idx?C.text:C.textMid,
+                    fontSize:13, fontWeight:activeStage===idx?700:400,
+                    flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {s.label||"（名前未設定）"}
+                  </span>
+                </div>
+                <div style={{ display:"flex", justifyContent:"space-between",
+                  alignItems:"center", paddingLeft:14 }}>
+                  <span style={{ color:C.textFaint, fontSize:11 }}>
+                    {(s.tasks||[]).length}タスク
+                  </span>
+                  <div style={{ display:"flex", gap:2 }}>
+                    <button onClick={e=>{e.stopPropagation();moveStage(idx,-1);}}
+                      disabled={idx===0}
+                      style={{ background:"none", border:"none", cursor:"pointer",
+                        color:idx===0?C.textFaint:C.textMuted, fontSize:10, padding:"1px 3px" }}>▲</button>
+                    <button onClick={e=>{e.stopPropagation();moveStage(idx,1);}}
+                      disabled={idx===stages.length-1}
+                      style={{ background:"none", border:"none", cursor:"pointer",
+                        color:idx===stages.length-1?C.textFaint:C.textMuted, fontSize:10, padding:"1px 3px" }}>▼</button>
+                    <button onClick={e=>{e.stopPropagation();removeStage(idx);}}
+                      disabled={stages.length<=1}
+                      style={{ background:"none", border:"none", cursor:"pointer",
+                        color:stages.length<=1?C.textFaint:C.red, fontSize:12, padding:"1px 4px" }}>✕</button>
+                  </div>
+                </div>
               </div>
-          }
+            ))}
+          </div>
+          {/* Add stage */}
+          <div style={{ padding:"10px 12px", borderTop:`1px solid ${C.borderLight}` }}>
+            <div style={{ display:"flex", gap:6 }}>
+              <input value={newStageLabel} onChange={e=>setNewStageLabel(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&addStage()}
+                placeholder="段階名を追加..."
+                style={{ ...INP, flex:1, fontSize:12, padding:"6px 8px" }} />
+              <Btn size="sm" onClick={addStage} disabled={!newStageLabel.trim()}>＋</Btn>
+            </div>
+          </div>
+        </div>
+
+        {/* Right: task editor for selected stage */}
+        {stage && <div style={{ flex:1, display:"flex", flexDirection:"column",
+          overflow:"hidden", minWidth:0 }}>
+
+          {/* Stage header — editable */}
+          <div style={{ padding:"12px 18px", borderBottom:`1px solid ${C.borderLight}`,
+            background:`${stage.color}09` }}>
+            <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+              {/* Color picker */}
+              <input type="color" value={stage.color}
+                onChange={e=>updateStage(activeStage,{color:e.target.value})}
+                style={{ width:28, height:28, border:"none", borderRadius:6,
+                  cursor:"pointer", padding:2 }} />
+              <div style={{ flex:1, minWidth:120 }}>
+                <input value={stage.label}
+                  onChange={e=>updateStage(activeStage,{label:e.target.value, short:e.target.value.slice(0,5)})}
+                  placeholder="段階名..."
+                  style={{ ...INP, fontSize:14, fontWeight:700, width:"100%",
+                    background:"transparent", border:`1px solid ${stage.color}44` }} />
+              </div>
+              <div style={{ width: isMobile ? "100%" : 100 }}>
+                <input value={stage.short}
+                  onChange={e=>updateStage(activeStage,{short:e.target.value.slice(0,6)})}
+                  placeholder="略称"
+                  style={{ ...INP, fontSize:12, width:"100%",
+                    background:"transparent", border:`1px solid ${stage.color}44` }} />
+              </div>
+            </div>
+          </div>
+
+          {/* Task list */}
+          <div style={{ flex:1, overflowY:"auto", padding:"12px 18px" }}>
+            {(stage.tasks||[]).length === 0 && (
+              <div style={{ color:C.textFaint, fontSize:13, textAlign:"center",
+                padding:"28px 0" }}>
+                タスクなし。下から追加してください。
+              </div>
+            )}
+            {(stage.tasks||[]).map((task, idx) => (
+              <div key={task.id}
+                style={{ display:"flex", alignItems:"center", gap:8,
+                  padding:"8px 10px", background:C.bg, borderRadius:8,
+                  marginBottom:6, border:`1px solid ${C.borderLight}` }}>
+                <div style={{ display:"flex", flexDirection:"column", gap:1 }}>
+                  <button onClick={()=>moveTask(idx,-1)} disabled={idx===0}
+                    style={{ background:"none", border:"none", cursor:"pointer",
+                      color:idx===0?C.textFaint:C.textMuted, fontSize:10, padding:"1px 3px" }}>▲</button>
+                  <button onClick={()=>moveTask(idx,1)} disabled={idx===(stage.tasks.length-1)}
+                    style={{ background:"none", border:"none", cursor:"pointer",
+                      color:idx===stage.tasks.length-1?C.textFaint:C.textMuted, fontSize:10, padding:"1px 3px" }}>▼</button>
+                </div>
+                <span style={{ color:C.textFaint, fontSize:11,
+                  fontFamily:"'DM Mono',monospace", width:18, textAlign:"right",
+                  flexShrink:0 }}>{idx+1}</span>
+                <input value={task.label}
+                  onChange={e=>editTaskLabel(task.id, e.target.value)}
+                  style={{ flex:1, background:"transparent", border:"none",
+                    borderBottom:`1px solid ${C.borderLight}`,
+                    color:C.text, fontSize:13, padding:"3px 4px",
+                    fontFamily:"'Noto Sans JP',sans-serif",
+                    outline:"none" }}
+                  onFocus={e=>e.target.style.borderBottomColor=C.primary}
+                  onBlur={e=>e.target.style.borderBottomColor=C.borderLight}
+                />
+                <button onClick={()=>removeTask(task.id)}
+                  style={{ background:"none", border:"none", cursor:"pointer",
+                    color:C.textMuted, fontSize:14, padding:"2px 5px",
+                    borderRadius:4, flexShrink:0 }}
+                  onMouseEnter={e=>e.currentTarget.style.color=C.red}
+                  onMouseLeave={e=>e.currentTarget.style.color=C.textMuted}>✕</button>
+              </div>
+            ))}
+            {/* Add task */}
+            <div style={{ display:"flex", gap:8, marginTop:8 }}>
+              <input value={newTask} onChange={e=>setNewTask(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&addTask()}
+                placeholder="タスクを追加..."
+                style={{ ...INP, flex:1, fontSize:13 }} />
+              <Btn size="sm" onClick={addTask} disabled={!newTask.trim()}>追加</Btn>
+            </div>
+          </div>
+        </div>}
+      </div>
+
+      {/* ── Footer ── */}
+      <div style={{ padding:"14px 24px", borderTop:`1px solid ${C.borderLight}`,
+        display:"flex", justifyContent:"space-between", alignItems:"center",
+        background:C.bg, flexWrap:"wrap", gap:10 }}>
+        <div style={{ color:C.textMuted, fontSize:12 }}>
+          {stages.length}段階 · {totalTasks}タスク · 全段階の内容は後からプロジェクト内で編集可能
         </div>
         <div style={{ display:"flex", gap:10 }}>
-          <Btn variant="ghost" onClick={onClose}>取消</Btn>
-          <Btn onClick={handleSave}>
-            {saved ? "✓ 保存しました" : "変更を保存"}
+          <Btn variant="ghost" onClick={onClose}>キャンセル</Btn>
+          <Btn onClick={handleSave} disabled={!name.trim()}>
+            {saved ? "✓ 保存しました" : "💾 テンプレートを保存"}
           </Btn>
         </div>
       </div>
@@ -1697,197 +1870,283 @@ function TaskEditorModal({ project, stageId, onSave, onClose, onSaveTemplate }) 
   </div>;
 }
 
-// ── TEMPLATE PICKER ───────────────────────────────────────────────────────────
-// Used when creating a new project — pick a survey type or saved template
-function TemplatePicker({ value, onChange, savedTemplates }) {
-  const [tab, setTab] = useState("builtin"); // builtin | saved
+// ── TEMPLATE MANAGER ──────────────────────────────────────────────────────────
+// Shown in NewProjectModal — lists built-in + saved templates, allows editing
+function TemplateManager({ savedTemplates, onSelect, onEdit, onDelete, onNew, selected }) {
+  const [tab, setTab] = useState("builtin");
   return <div>
-    <div style={{ display:"flex", gap:0, marginBottom:12,
+    <div style={{ display:"flex", gap:0, marginBottom:14,
       border:`1px solid ${C.border}`, borderRadius:8, overflow:"hidden" }}>
-      {[["builtin","標準テンプレート"],["saved","保存済み"]].map(([k,v])=>(
+      {[["builtin","📋 標準テンプレート"],["saved",`💾 保存済み (${savedTemplates.length})`]].map(([k,v])=>(
         <button key={k} onClick={()=>setTab(k)} style={{
-          flex:1, padding:"8px", background:tab===k?C.primary:C.surface,
-          border:"none", color:tab===k?C.white:C.textMuted,
-          cursor:"pointer", fontSize:13, fontWeight:tab===k?700:400,
-          fontFamily:"'Noto Sans JP',sans-serif",
-        }}>{v}</button>
+          flex:1, padding:"9px", background:tab===k?C.primary:C.surface,
+          border:"none", color:tab===k?C.white:C.textMuted, cursor:"pointer",
+          fontSize:13, fontWeight:tab===k?700:400,
+          fontFamily:"'Noto Sans JP',sans-serif" }}>{v}</button>
       ))}
     </div>
-    {tab==="builtin" && <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:8 }}>
-      {SURVEY_TYPES.filter(t=>t.id!=="custom").map(t=>(
-        <div key={t.id} onClick={()=>onChange(t.id)}
+
+    {tab==="builtin" && <div style={{ display:"grid",
+      gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))", gap:8 }}>
+      {SURVEY_TYPES.filter(t=>t.id!=="custom").map(t=>{
+        const sel = selected?.type==="builtin" && selected?.id===t.id;
+        return <div key={t.id} onClick={()=>onSelect({type:"builtin",id:t.id})}
           style={{ padding:"12px 14px", borderRadius:10, cursor:"pointer",
-            border:`2px solid ${value===t.id?t.color:C.borderLight}`,
-            background:value===t.id?`${t.color}11`:C.surface,
-            display:"flex", alignItems:"center", gap:10 }}>
-          <span style={{ fontSize:20 }}>{t.icon}</span>
-          <span style={{ color:value===t.id?t.color:C.text, fontSize:13,
-            fontWeight:value===t.id?700:400 }}>{t.label}</span>
-        </div>
-      ))}
+            border:`2px solid ${sel?t.color:C.borderLight}`,
+            background:sel?`${t.color}11`:C.surface,
+            display:"flex", flexDirection:"column", gap:6 }}>
+          <span style={{ fontSize:22 }}>{t.icon}</span>
+          <span style={{ color:sel?t.color:C.text, fontSize:13, fontWeight:sel?700:400,
+            lineHeight:1.3 }}>{t.label}</span>
+          <span style={{ color:C.textFaint, fontSize:11 }}>7段階 · 標準タスク</span>
+        </div>;
+      })}
     </div>}
-    {tab==="saved" && (savedTemplates.length === 0
-      ? <div style={{ color:C.textFaint, fontSize:13, textAlign:"center", padding:"20px 0" }}>
-          保存済みテンプレートはありません
-        </div>
-      : <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-          {savedTemplates.map(t=>(
-            <div key={t.id} onClick={()=>onChange(`saved:${t.id}`)}
-              style={{ padding:"12px 14px", borderRadius:10, cursor:"pointer",
-                border:`2px solid ${value===`saved:${t.id}`?C.primary:C.borderLight}`,
-                background:value===`saved:${t.id}`?C.light:C.surface }}>
-              <div style={{ color:C.text, fontSize:13, fontWeight:700 }}>{t.name}</div>
-              <div style={{ color:C.textMuted, fontSize:12, marginTop:2 }}>
-                {SURVEY_TYPES.find(s=>s.id===t.surveyType)?.label||t.surveyType} · 
-                第{t.stageId}段階 · {t.tasks?.length||0}タスク
-              </div>
-            </div>
-          ))}
-        </div>
-    )}
-  </div>
-  {editingTasksStage !== null && <TaskEditorModal
-    project={project}
-    stageId={editingTasksStage}
-    onSave={(stageId, newTasks) => {
-      const updated = { ...project, tasks: { ...project.tasks, [stageId]: newTasks } };
-      push(updated);
-    }}
-    onSaveTemplate={onSaveTemplate}
-    onClose={()=>setEditingTasksStage(null)}
-  />};
+
+    {tab==="saved" && <>
+      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:10 }}>
+        <Btn size="sm" icon="＋" onClick={onNew}>新規テンプレートを作成</Btn>
+      </div>
+      {savedTemplates.length === 0
+        ? <div style={{ color:C.textFaint, fontSize:13, textAlign:"center",
+            padding:"28px 0", background:C.bg, borderRadius:10 }}>
+            保存済みテンプレートはありません。<br/>
+            「新規テンプレートを作成」から作成できます。
+          </div>
+        : <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {savedTemplates.map(t=>{
+              const sel = selected?.type==="saved" && selected?.id===t.id;
+              return <div key={t.id}
+                style={{ padding:"12px 16px", borderRadius:10,
+                  border:`2px solid ${sel?C.primary:C.borderLight}`,
+                  background:sel?C.light:C.surface }}>
+                <div style={{ display:"flex", justifyContent:"space-between",
+                  alignItems:"flex-start", gap:8 }}>
+                  <div style={{ flex:1, cursor:"pointer" }} onClick={()=>onSelect({type:"saved",id:t.id})}>
+                    <div style={{ color:C.text, fontSize:14, fontWeight:700 }}>{t.name}</div>
+                    {t.description && <div style={{ color:C.textMuted, fontSize:12,
+                      marginTop:2 }}>{t.description}</div>}
+                    <div style={{ color:C.textFaint, fontSize:11, marginTop:4,
+                      fontFamily:"'DM Mono',monospace" }}>
+                      {t.stages?.length||0}段階 · {t.stages?.reduce((n,s)=>n+(s.tasks?.length||0),0)||0}タスク合計
+                    </div>
+                  </div>
+                  <div style={{ display:"flex", gap:6, flexShrink:0 }}>
+                    <Btn variant="ghost" size="sm" onClick={()=>onEdit(t)}>編集</Btn>
+                    <Btn variant="danger" size="sm" onClick={()=>{
+                      if(window.confirm(`「${t.name}」を削除しますか？`)) onDelete(t.id);
+                    }}>削除</Btn>
+                  </div>
+                </div>
+                {sel && t.stages && <div style={{ marginTop:10, display:"flex",
+                  gap:6, flexWrap:"wrap" }}>
+                  {t.stages.map(s=>(
+                    <div key={s.id} style={{ padding:"3px 8px", borderRadius:20,
+                      background:`${s.color}18`, border:`1px solid ${s.color}44`,
+                      fontSize:11, color:s.color, fontWeight:600 }}>
+                      {s.short||s.label} ({(s.tasks||[]).length})
+                    </div>
+                  ))}
+                </div>}
+              </div>;
+            })}
+          </div>
+      }
+    </>}
+  </div>;
 }
-function NewProjectModal({ onSave, onCancel, savedTemplates=[] }) {
+
+
+function NewProjectModal({ onSave, onCancel, savedTemplates=[], onSaveTemplate, onDeleteTemplate }) {
   const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
+  const [step, setStep] = useState(1); // 1=info, 2=template
   const [d, setD] = useState({
     name:"", client:"", type:"wind", pref:"東京都",
-    surveyType:"bio",
     deadline:"2027-03-31", area:"", budget:"",
-    desc:"", manager:"田中 誠一", risk:"low"
+    desc:"", manager:"", risk:"low"
   });
   const f = k => e => setD(p => ({...p,[k]:e.target.value}));
 
-  return <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)",
-    zIndex:500, display:"flex", alignItems:"center", justifyContent:"center" }}>
-    <div style={{ background:C.surface, borderRadius:16, padding:"32px 36px",
-      width:580, maxHeight:"90vh", overflowY:"auto",
-      boxShadow:"0 20px 60px rgba(0,0,0,0.25)" }}>
-      <h2 style={{ color:C.text, fontFamily:"'Noto Serif JP',serif",
-        fontSize:22, fontWeight:700, marginBottom:8 }}>新規プロジェクトを作成</h2>
-      <p style={{ color:C.textMuted, fontSize:14, marginBottom:24 }}>
-        作成後、プロジェクト詳細画面で第1段階（配慮書）からタスクを進めることができます
-      </p>
+  // Selected template: { type:"builtin"|"saved", id }
+  const [selectedTmpl, setSelectedTmpl] = useState({ type:"builtin", id:"bio" });
+  // For building/editing a template inline
+  const [buildingTemplate, setBuildingTemplate] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState(null);
 
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:16 }}>
-        {[
-          { l:"プロジェクト名*", k:"name", span:true, ph:"例：○○山系太陽光発電EIA" },
-          { l:"クライアント名*", k:"client", ph:"例：○○株式会社" },
-          { l:"担当者",          k:"manager" },
-        ].map(f2 => <div key={f2.k} style={{ gridColumn:f2.span?"1/-1":"auto" }}>
-          <label style={{ display:"block", color:C.textMid, fontSize:14,
-            fontWeight:700, marginBottom:7 }}>{f2.l}</label>
-          <input value={d[f2.k]} onChange={f(f2.k)} placeholder={f2.ph||""}
-            style={{ ...INP, fontSize:14 }} />
-        </div>)}
+  const resolveStages = () => {
+    if (selectedTmpl.type === "saved") {
+      const t = savedTemplates.find(t => t.id === selectedTmpl.id);
+      return t?.stages || DEFAULT_TEMPLATE_STAGES();
+    }
+    // builtin
+    const base = TEMPLATE_TASKS[selectedTmpl.id] || TEMPLATE_TASKS.bio;
+    return STAGES.map(s => ({
+      ...s,
+      tasks: (base[s.id]||[]).map((label,i) => ({
+        id:`bi_${s.id}_${i}`, label, done:false
+      }))
+    }));
+  };
 
-        <div>
-          <label style={{ display:"block", color:C.textMid, fontSize:14,
-            fontWeight:700, marginBottom:7 }}>事業種別*</label>
-          <select value={d.type} onChange={f("type")} style={{ ...INP, fontSize:14 }}>
-            {[["wind","💨 風力発電"],["solar","☀️ 太陽光発電"],["road","🛣️ 道路"],
-              ["dam","🌊 ダム"],["rail","🚄 鉄道"],["port","⚓ 港湾"]].map(([v,l])=>(
-              <option key={v} value={v}>{l}</option>
-            ))}
-          </select>
+  const handleCreate = () => {
+    const stages = resolveStages();
+    const tasksObj = {};
+    stages.forEach(s => { tasksObj[s.id] = s.tasks; });
+    onSave({
+      ...d, id: Date.now(), stage: stages[0]?.id || 1,
+      customStages: stages,
+      tasks: tasksObj,
+      species:[], redListCount:0, progress:0,
+      comments:[], documents:[],
+    });
+  };
+
+  if (buildingTemplate) return <TemplateBuilderModal
+    initial={editingTemplate}
+    onSave={t => { onSaveTemplate(t); setBuildingTemplate(false); setEditingTemplate(null); setSelectedTmpl({type:"saved",id:t.id}); }}
+    onClose={() => { setBuildingTemplate(false); setEditingTemplate(null); }}
+  />;
+
+  return <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)",
+    zIndex:500, display:"flex", alignItems:isMobile?"flex-end":"center", justifyContent:"center" }}>
+    <div style={{ background:C.surface,
+      borderRadius: isMobile ? "16px 16px 0 0" : 16,
+      width: isMobile ? "100vw" : "min(620px,96vw)",
+      maxHeight: isMobile ? "92vh" : "90vh",
+      overflowY:"auto", boxShadow:"0 20px 60px rgba(0,0,0,0.25)",
+      display:"flex", flexDirection:"column" }}>
+
+      {/* Header */}
+      <div style={{ padding:"22px 28px 16px", borderBottom:`1px solid ${C.borderLight}` }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+          <h2 style={{ color:C.text, fontFamily:"'Noto Serif JP',serif",
+            fontSize:20, fontWeight:700 }}>新規プロジェクトを作成</h2>
+          <Btn variant="ghost" size="sm" onClick={onCancel}>✕</Btn>
         </div>
-        <div>
-          <label style={{ display:"block", color:C.textMid, fontSize:14,
-            fontWeight:700, marginBottom:7 }}>都道府県*</label>
-          <select value={d.pref} onChange={f("pref")} style={{ ...INP, fontSize:14 }}>
-            {["北海道","青森県","岩手県","宮城県","秋田県","山形県","福島県",
-              "茨城県","栃木県","群馬県","埼玉県","千葉県","東京都","神奈川県",
-              "新潟県","富山県","石川県","福井県","山梨県","長野県",
-              "岐阜県","静岡県","愛知県","三重県",
-              "滋賀県","京都府","大阪府","兵庫県","奈良県","和歌山県",
-              "鳥取県","島根県","岡山県","広島県","山口県",
-              "徳島県","香川県","愛媛県","高知県",
-              "福岡県","佐賀県","長崎県","熊本県","大分県","宮崎県","鹿児島県","沖縄県"
-            ].map(p=><option key={p}>{p}</option>)}
-          </select>
-        </div>
-        <div>
-          <label style={{ display:"block", color:C.textMid, fontSize:14,
-            fontWeight:700, marginBottom:7 }}>事業面積 (ha)</label>
-          <input value={d.area} onChange={f("area")} placeholder="例：500" style={{ ...INP, fontSize:14 }} />
-        </div>
-        <div>
-          <label style={{ display:"block", color:C.textMid, fontSize:14,
-            fontWeight:700, marginBottom:7 }}>提出期限</label>
-          <input type="date" value={d.deadline} onChange={f("deadline")} style={{ ...INP, fontSize:14 }} />
-        </div>
-        <div>
-          <label style={{ display:"block", color:C.textMid, fontSize:14,
-            fontWeight:700, marginBottom:7 }}>リスクレベル</label>
-          <select value={d.risk} onChange={f("risk")} style={{ ...INP, fontSize:14 }}>
-            <option value="low">低リスク</option>
-            <option value="medium">中リスク</option>
-            <option value="high">高リスク</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display:"block", color:C.textMid, fontSize:14,
-            fontWeight:700, marginBottom:7 }}>予算（円）</label>
-          <input value={d.budget} onChange={f("budget")} placeholder="例：5000000" style={{ ...INP, fontSize:14 }} />
+        {/* Step indicator */}
+        <div style={{ display:"flex", gap:0 }}>
+          {[["1","基本情報"],["2","タスクテンプレート"]].map(([n,l],i)=>(
+            <div key={n} onClick={()=>{ if(i===1&&!d.name.trim()) return; setStep(i+1); }}
+              style={{ display:"flex", alignItems:"center", gap:8, flex:1,
+                cursor: i===0||(d.name.trim()&&d.client.trim()) ? "pointer" : "default",
+                opacity: i===1 && !d.name.trim() ? 0.4 : 1 }}>
+              <div style={{ width:24, height:24, borderRadius:"50%",
+                background: step===i+1 ? C.primary : step>i+1 ? C.mid : C.bg,
+                border:`2px solid ${step===i+1?C.primary:step>i+1?C.mid:C.border}`,
+                display:"flex", alignItems:"center", justifyContent:"center",
+                fontSize:11, fontWeight:700,
+                color: step===i+1||step>i+1 ? C.white : C.textMuted }}>
+                {step>i+1 ? "✓" : n}
+              </div>
+              <span style={{ fontSize:13, color:step===i+1?C.primary:C.textMuted,
+                fontWeight:step===i+1?700:400 }}>{l}</span>
+              {i<1 && <div style={{ flex:1, height:2,
+                background: step>1 ? C.mid : C.borderLight, margin:"0 8px" }}/>}
+            </div>
+          ))}
         </div>
       </div>
 
-      <div style={{ marginBottom:24 }}>
-        <label style={{ display:"block", color:C.textMid, fontSize:14,
-          fontWeight:700, marginBottom:7 }}>事業概要</label>
-        <textarea value={d.desc} onChange={f("desc")} rows={3}
-          placeholder="事業の目的・場所・規模などを簡潔に記入してください"
-          style={{ ...INP, fontSize:14, resize:"vertical" }} />
-      </div>
+      <div style={{ flex:1, overflowY:"auto", padding:"22px 28px" }}>
 
-      <div style={{ marginBottom:20 }}>
-        <label style={{ display:"block", color:C.textMid, fontSize:15,
-          fontWeight:700, marginBottom:10 }}>調査タイプ・タスクテンプレート *</label>
-        <TemplatePicker
-          value={d.surveyType}
-          onChange={v=>setD({...d,surveyType:v})}
-          savedTemplates={savedTemplates}
-        />
-      </div>
+        {/* ── Step 1: Project info ── */}
+        {step===1 && <>
+          <div style={{ display:"grid", gridTemplateColumns: isMobile?"1fr":"1fr 1fr",
+            gap:14, marginBottom:16 }}>
+            {[
+              { l:"プロジェクト名 *", k:"name", span:true, ph:"例：○○山系太陽光発電EIA" },
+              { l:"クライアント名 *", k:"client", ph:"例：○○株式会社" },
+              { l:"担当者",          k:"manager", ph:"例：山田 太郎" },
+            ].map(fi => <div key={fi.k} style={{ gridColumn:fi.span?"1/-1":"auto" }}>
+              <label style={{ display:"block", color:C.textMid, fontSize:14,
+                fontWeight:700, marginBottom:7 }}>{fi.l}</label>
+              <input value={d[fi.k]} onChange={f(fi.k)} placeholder={fi.ph||""}
+                style={{ ...INP, fontSize:14 }} />
+            </div>)}
+            <div>
+              <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>事業種別 *</label>
+              <select value={d.type} onChange={f("type")} style={{ ...INP, fontSize:14 }}>
+                {[["wind","💨 風力発電"],["solar","☀️ 太陽光発電"],["road","🛣️ 道路"],
+                  ["dam","🌊 ダム"],["rail","🚄 鉄道"],["port","⚓ 港湾"]].map(([v,l])=>(
+                  <option key={v} value={v}>{l}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>都道府県 *</label>
+              <select value={d.pref} onChange={f("pref")} style={{ ...INP, fontSize:14 }}>
+                {["北海道","青森県","岩手県","宮城県","秋田県","山形県","福島県",
+                  "茨城県","栃木県","群馬県","埼玉県","千葉県","東京都","神奈川県",
+                  "新潟県","富山県","石川県","福井県","山梨県","長野県",
+                  "岐阜県","静岡県","愛知県","三重県",
+                  "滋賀県","京都府","大阪府","兵庫県","奈良県","和歌山県",
+                  "鳥取県","島根県","岡山県","広島県","山口県",
+                  "徳島県","香川県","愛媛県","高知県",
+                  "福岡県","佐賀県","長崎県","熊本県","大分県","宮崎県","鹿児島県","沖縄県"
+                ].map(p=><option key={p}>{p}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>事業面積 (ha)</label>
+              <input value={d.area} onChange={f("area")} placeholder="例：500" style={{ ...INP, fontSize:14 }} />
+            </div>
+            <div>
+              <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>提出期限</label>
+              <input type="date" value={d.deadline} onChange={f("deadline")} style={{ ...INP, fontSize:14 }} />
+            </div>
+            <div>
+              <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>リスクレベル</label>
+              <select value={d.risk} onChange={f("risk")} style={{ ...INP, fontSize:14 }}>
+                <option value="low">低リスク</option>
+                <option value="medium">中リスク</option>
+                <option value="high">高リスク</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>予算（円）</label>
+              <input value={d.budget} onChange={f("budget")} placeholder="例：5000000" style={{ ...INP, fontSize:14 }} />
+            </div>
+          </div>
+          <div style={{ marginBottom:20 }}>
+            <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>事業概要</label>
+            <textarea value={d.desc} onChange={f("desc")} rows={3}
+              placeholder="事業の目的・場所・規模などを簡潔に記入してください"
+              style={{ ...INP, fontSize:14, resize:"vertical" }} />
+          </div>
+          <Btn fullWidth size="lg"
+            disabled={!d.name.trim()||!d.client.trim()}
+            onClick={()=>setStep(2)}>
+            次へ：タスクテンプレートを選ぶ →
+          </Btn>
+        </>}
 
-      <div style={{ background:C.light, border:`1px solid ${C.primary}33`,
-        borderRadius:10, padding:"12px 16px", marginBottom:20 }}>
-        <div style={{ color:C.primary, fontSize:13, fontWeight:700, marginBottom:4 }}>
-          📋 作成後の流れ
-        </div>
-        <div style={{ color:C.textMid, fontSize:13, lineHeight:1.65 }}>
-          プロジェクトが作成されると <strong>第1段階（配慮書手続）</strong> から開始します。
-          各段階でタスクをチェックし、全タスク完了後に次の段階へ進めます。
-          第3段階（現地調査）では確認種を直接入力できます。
-          <strong style={{ color:C.primary }}> タスクは作成後もいつでも編集できます。</strong>
-        </div>
-      </div>
-
-      <div style={{ display:"flex", gap:10 }}>
-        <Btn fullWidth size="lg"
-          disabled={!d.name.trim()||!d.client.trim()}
-          onClick={()=>onSave({
-            ...d, id:Date.now(), stage:1, species:[], redListCount:0, progress:0,
-            tasks:{1:makeInitialTasks(1),2:makeInitialTasks(2),3:makeInitialTasks(3),
-                   4:makeInitialTasks(4),5:makeInitialTasks(5),6:makeInitialTasks(6),7:makeInitialTasks(7)},
-            comments:[], documents:[]
-          })}>
-          プロジェクトを作成する →
-        </Btn>
-        <Btn variant="ghost" size="lg" onClick={onCancel}>キャンセル</Btn>
+        {/* ── Step 2: Template picker ── */}
+        {step===2 && <>
+          <p style={{ color:C.textMuted, fontSize:13, marginBottom:16 }}>
+            プロジェクトの各段階で使うタスクのテンプレートを選んでください。
+            標準テンプレートは自動で設定されます。保存済みテンプレートを使うか、新規作成も可能です。
+          </p>
+          <TemplateManager
+            savedTemplates={savedTemplates}
+            selected={selectedTmpl}
+            onSelect={setSelectedTmpl}
+            onNew={()=>{ setEditingTemplate(null); setBuildingTemplate(true); }}
+            onEdit={t=>{ setEditingTemplate(t); setBuildingTemplate(true); }}
+            onDelete={onDeleteTemplate}
+          />
+          <div style={{ display:"flex", gap:10, marginTop:20 }}>
+            <Btn variant="ghost" onClick={()=>setStep(1)}>← 戻る</Btn>
+            <Btn fullWidth size="lg" onClick={handleCreate}>
+              ✓ プロジェクトを作成する
+            </Btn>
+          </div>
+        </>}
       </div>
     </div>
   </div>;
 }
+
+
 
 // ─── SCOPING MODULE ───────────────────────────────────────────────────────────
 function ScopingModule() {
@@ -2660,6 +2919,11 @@ export default function App() {
     setSavedTemplates(await getAllTemplates().catch(()=>[]));
   };
 
+  const handleDeleteTemplate = async (id) => {
+    await deleteTemplate(id).catch(()=>{});
+    setSavedTemplates(await getAllTemplates().catch(()=>[]));
+  };
+
   const handleLogout = async () => {
     if(isConfigured) await supabase.auth.signOut();
     setLoggedIn(false); setOrg(null); setCurrentUser(null);
@@ -2696,9 +2960,11 @@ export default function App() {
     </div>
     {showNew&&<NewProjectModal
       savedTemplates={savedTemplates}
+      onSaveTemplate={handleSaveTemplate}
+      onDeleteTemplate={handleDeleteTemplate}
       onSave={np=>{
-        const tasks = makeTasksForSurveyType(np.surveyType||"bio");
-        const full = {...np, tasks, species:[], redListCount:0, progress:0, comments:[], documents:[]};
+        // np.customStages and np.tasks already set by NewProjectModal
+        const full = { ...np, species:[], redListCount:0, progress:0, comments:[], documents:[] };
         setProjects(p=>[...p,full]);
         saveProjectLocal(full).catch(()=>{});
         setShowNew(false);
