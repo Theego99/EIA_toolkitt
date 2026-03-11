@@ -64,28 +64,24 @@ async function flushSyncQueue(sb) {
   for (const entry of queue) {
     try {
       if (entry.table==="projects") {
-        const payload = sanitizeProjectPayload(entry.payload);
         if (entry.op==="upsert") {
-          const {error}=await sb.from("projects").upsert(payload);
-          if(error) throw new Error(`Supabase: ${error.message} (code: ${error.code})`);
+          // Ensure org_id present — if missing, skip (will retry when org loads)
+          if(!entry.payload?.organization_id) {
+            console.warn("[Sync] Skipping entry — no organization_id yet:", entry.qid);
+            failed++; continue;
+          }
+          const payload = sanitizeProjectPayload(entry.payload);
+          const {data, error}=await sb.from("projects").upsert(payload).select("id").single();
+          if(error) throw new Error(`${error.code}: ${error.message}`);
         } else if (entry.op==="delete") {
-          const {error}=await sb.from("projects").delete().eq("id",entry.payload.id);
-          if(error) throw new Error(`Supabase: ${error.message} (code: ${error.code})`);
+          const {error}=await sb.from("projects").delete().eq("id",String(entry.payload.id));
+          if(error) throw new Error(`${error.code}: ${error.message}`);
         }
       }
       await removeFromQueue(entry.qid); synced++;
     } catch(e) {
       console.error("[Sync] FAILED entry", entry.qid, e.message);
-      // If it's a schema error (unknown column / type mismatch), remove from queue
-      // so it doesn't block forever — user needs to run migration
-      const isSchemaError = e.message.includes("column") || e.message.includes("uuid") || e.message.includes("42703") || e.message.includes("22P02");
-      if (isSchemaError) {
-        console.error("[Sync] Schema error — run migration_v2.sql in Supabase. Removing entry to unblock queue.");
-        await removeFromQueue(entry.qid).catch(()=>{});
-        synced++; // count as "handled" so bar clears
-      } else {
-        failed++;
-      }
+      failed++;
     }
   }
   return { synced, failed };
@@ -441,12 +437,16 @@ function SLabel({ children }) {
     textTransform:"uppercase", marginBottom:12 }}>{children}</div>;
 }
 
-function StageBar({ stage }) {
+function StageBar({ stage, project }) {
+  const stages = project?.customStages || STAGES;
+  const total = stages.length;
+  const curIdx = stages.findIndex(s => s.id === stage);
+  const displayNum = curIdx >= 0 ? curIdx + 1 : stage;
   return <div style={{ display:"flex", gap:3, alignItems:"center" }}>
-    {STAGES.map(s => <div key={s.id} title={s.label} style={{ flex:1, height:7, borderRadius:4,
-      background:s.id<=stage?s.color:C.borderLight }} />)}
+    {stages.map((s,i) => <div key={s.id} title={s.label} style={{ flex:1, height:7, borderRadius:4,
+      background:i<curIdx?s.color:i===curIdx?s.color:C.borderLight, opacity:i===curIdx?1:i<curIdx?0.7:1 }} />)}
     <span style={{ marginLeft:8, fontSize:13, color:C.textMuted,
-      fontFamily:"'DM Mono',monospace", fontWeight:600 }}>{stage}/7</span>
+      fontFamily:"'DM Mono',monospace", fontWeight:600, whiteSpace:"nowrap" }}>{displayNum}/{total}</span>
   </div>;
 }
 
@@ -830,7 +830,7 @@ function ProjectCard({ project, onClick, onDelete }) {
       </div>
       <Chip color={risk.c} bg={risk.bg}>{risk.label}</Chip>
     </div>
-    <StageBar stage={project.stage} />
+    <StageBar stage={project.stage} project={project} />
     {/* Next action hint */}
     {nextTask && <div style={{ marginTop:12, padding:"8px 12px",
       background:C.bg, borderRadius:8,
@@ -2021,10 +2021,6 @@ function OfflineBar({ isOnline, pendingCount, syncing, onManualSync, syncError }
     fontSize:12, display:"flex", justifyContent:"space-between", alignItems:"center"
   }}>
     <span>⚠️ 同期エラー: {syncError}</span>
-    <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer"
-      style={{ color:"#FCA5A5", fontSize:11, marginLeft:12 }}>
-      migration_v2.sql を実行してください →
-    </a>
   </div>}
   </>;
 }
@@ -3302,10 +3298,51 @@ export default function App() {
         const { data:profile } = await supabase
           .from("profiles").select("*, organizations(*)")
           .eq("id", session.user.id).single();
-        setOrg(profile?.organizations ?? { name:session.user.email, plan:"starter" });
+        const orgData = profile?.organizations ?? { name:session.user.email, plan:"starter" };
+        setOrg(orgData);
         setCurrentUser({ id:session.user.id, name:profile?.name||session.user.email,
           email:session.user.email, role:profile?.role||"pm" });
         setLoggedIn(true);
+
+        // Fetch authoritative project list now that we have a session
+        const { data: rows } = await supabase
+          .from("projects").select("*").order("created_at", { ascending:false });
+        if(rows?.length){
+          const mapped = rows.map(row => ({
+            id: String(row.id), name: row.name, client: row.client, type: row.type,
+            stage: row.stage, pref: row.pref, deadline: row.deadline,
+            area: row.area, budget: row.budget, desc: row.description,
+            manager: row.manager, risk: row.risk, progress: row.progress,
+            redListCount: row.red_list_count||0, tasks: row.tasks||{},
+            customStages: row.custom_stages||null, species: row.species_data||[],
+            comments: row.comments||[], documents: row.documents||[],
+            projectClass: row.project_class||"1", juranDates: row.juran_dates||{},
+          }));
+          setProjects(mapped);
+          for(const p of mapped) saveProjectLocal(p).catch(()=>{});
+        }
+
+        // Flush any queued offline writes now that we have a session + org
+        const qLen = await getSyncQueueLength().catch(()=>0);
+        if(qLen > 0){
+          // Patch in org_id for any queued entries that are missing it
+          const queue = await idbGetAll("syncQueue").catch(()=>[]);
+          for(const e of queue){
+            if(e.table==="projects" && e.op==="upsert" && !e.payload?.organization_id){
+              e.payload.organization_id = orgData?.id;
+              // Re-save with org_id
+              const db = await openDB();
+              await new Promise((res,rej)=>{
+                const r = db.transaction("syncQueue","readwrite").objectStore("syncQueue").put(e);
+                r.onsuccess=()=>res(); r.onerror=()=>rej(r.error);
+              }).catch(()=>{});
+            }
+          }
+          setSyncing(true);
+          await flushSyncQueue(supabase).catch(()=>{});
+          setSyncing(false);
+          setPendingSync(await getSyncQueueLength().catch(()=>0));
+        }
       }
     });
     const { data:{ subscription } } = supabase.auth.onAuthStateChange((event)=>{
@@ -3339,42 +3376,7 @@ export default function App() {
       if(migrated.length > 0) setProjects(migrated);
     }).catch(()=>{});
 
-    // ── 3. Fetch authoritative list from Supabase (replaces local state) ────
-    if(isConfigured){
-      supabase.auth.getSession().then(async ({ data:{ session } }) => {
-        if(!session) return;
-        const { data: rows, error } = await supabase
-          .from("projects")
-          .select("*")
-          .order("created_at", { ascending: false });
-        if(error){ console.error("[Load] Supabase fetch failed:", error.message); return; }
-        if(!rows?.length) return;
-        const mapped = rows.map(row => ({
-          id: String(row.id),
-          name: row.name, client: row.client, type: row.type,
-          stage: row.stage, pref: row.pref, deadline: row.deadline,
-          area: row.area, budget: row.budget, desc: row.description,
-          manager: row.manager, risk: row.risk, progress: row.progress,
-          redListCount: row.red_list_count||0, tasks: row.tasks||{},
-          customStages: row.custom_stages||null, species: row.species_data||[],
-          comments: row.comments||[], documents: row.documents||[],
-          projectClass: row.project_class||"1", juranDates: row.juran_dates||{},
-        }));
-        setProjects(mapped);
-        // Sync to IndexedDB
-        for(const p of mapped) saveProjectLocal(p).catch(()=>{});
-        // Flush any queued offline changes
-        const qLen = await getSyncQueueLength().catch(()=>0);
-        if(qLen > 0){
-          setSyncing(true);
-          await flushSyncQueue(supabase).catch(()=>{});
-          setSyncing(false);
-          setPendingSync(await getSyncQueueLength().catch(()=>0));
-        }
-      }).catch(()=>{});
-    }
-
-    // ── 4. Online/offline listeners ─────────────────────────────────────────
+    // ── 3. Online/offline listeners ───────────────────────────────────────── ─────────────────────────────────────────
     const goOnline = async () => {
       setIsOnline(true);
       if(!isConfigured) return;
@@ -3394,11 +3396,15 @@ export default function App() {
     const poll = setInterval(async ()=>{
       const n = await getSyncQueueLength().catch(()=>0);
       setPendingSync(n);
+      // Only flush if we have an active session (org loaded = safe to write)
       if(n > 0 && navigator.onLine && isConfigured){
+        const { data:{ session } } = await supabase.auth.getSession().catch(()=>({ data:{} }));
+        if(!session) return; // not logged in yet, skip
         setSyncing(true);
-        await flushSyncQueue(supabase).catch(()=>{});
+        const result = await flushSyncQueue(supabase).catch(()=>({ synced:0, failed:0 }));
         setSyncing(false);
-        setPendingSync(await getSyncQueueLength().catch(()=>0));
+        const remaining = await getSyncQueueLength().catch(()=>0);
+        setPendingSync(remaining);
       }
     }, 10000);
 
