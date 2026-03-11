@@ -3359,16 +3359,25 @@ export default function App() {
     // ── 1. Load templates ────────────────────────────────────────────────────
     getAllTemplates().then(setSavedTemplates).catch(()=>{});
 
-    // ── 2. Load projects: IndexedDB first (instant), then Supabase (authoritative)
+    // ── 2. Purge any stale syncQueue entries with numeric/timestamp IDs ──────
+    //    These are from old demo projects and will NEVER succeed in Supabase.
+    idbGetAll("syncQueue").then(async queue => {
+      for(const e of queue){
+        const id = String(e.payload?.id ?? "");
+        if(/^\d{10,}$/.test(id)){
+          console.log("[Migration] Removing zombie queue entry with numeric ID:", id);
+          await removeFromQueue(e.qid).catch(()=>{});
+        }
+      }
+    }).catch(()=>{});
+
+    // ── 3. Load projects from IndexedDB (instant offline start) ──────────────
     getAllProjectsLocal().then(async local => {
-      // Migrate any legacy numeric IDs
+      // Migrate any legacy numeric IDs in the projects store
       const migrated = [];
       for(const p of local){
         if(typeof p.id === "number" || /^\d{10,}$/.test(String(p.id))){
-          const fixed = {...p, id: crypto.randomUUID()};
-          await saveProjectLocal(fixed).catch(()=>{});
-          await deleteProjectLocal(p.id).catch(()=>{});
-          migrated.push(fixed);
+          await deleteProjectLocal(p.id).catch(()=>{}); // drop — Supabase never had it
         } else {
           migrated.push({...p, id: String(p.id)});
         }
