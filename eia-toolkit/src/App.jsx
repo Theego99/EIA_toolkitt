@@ -88,15 +88,36 @@ const C = {
   shadowMd:"0 4px 20px rgba(0,0,0,0.10)",
 };
 
+// ── 法定EIA手続きフロー（環境影響評価法・施行令準拠）──────────────────────────
+// 6段階：配慮書（任意）→ 方法書 → 現地調査 → 準備書 → 評価書 → 事後調査報告書
+// 意見聴取は方法書・準備書に内包（独立段階ではない）
 const STAGES = [
-  { id:1, short:"配慮書",   label:"配慮書手続",   color:"#059669", desc:"事業の早期環境配慮・初期スコーピング" },
-  { id:2, short:"方法書",   label:"方法書手続",   color:"#2563EB", desc:"調査手法の設計・公告・縦覧・意見聴取" },
-  { id:3, short:"現地調査", label:"現地調査",     color:"#D97706", desc:"実際の生物多様性フィールド調査・記録" },
-  { id:4, short:"準備書",   label:"準備書手続",   color:"#7C3AED", desc:"環境影響評価準備書の作成・縦覧・意見聴取" },
-  { id:5, short:"意見聴取", label:"意見聴取",     color:"#DB2777", desc:"1ヶ月間の公告・縦覧・寄せられた意見の管理" },
-  { id:6, short:"評価書",   label:"評価書",       color:"#DC2626", desc:"最終評価書の作成・許認可機関への提出" },
-  { id:7, short:"事後調査", label:"事後調査",     color:"#0891B2", desc:"工事中・供用後の継続モニタリング" },
+  { id:1, short:"配慮書",   label:"配慮書手続",         color:"#059669", desc:"計画段階からの早期環境配慮（任意手続）",                                statutory:true,  juran:false },
+  { id:2, short:"方法書",   label:"方法書手続",         color:"#2563EB", desc:"調査手法・地点・項目の確定／公告縦覧30日／住民意見・知事意見",         statutory:true,  juran:true  },
+  { id:3, short:"現地調査", label:"現地調査",           color:"#D97706", desc:"実際の現地調査・データ取得（法令上の段階ではなく業務実施フェーズ）",   statutory:false, juran:false },
+  { id:4, short:"準備書",   label:"準備書手続",         color:"#7C3AED", desc:"準備書作成・公告縦覧30日／住民意見・知事意見（4ヶ月）・大臣意見",     statutory:true,  juran:true  },
+  { id:5, short:"評価書",   label:"評価書手続",         color:"#DC2626", desc:"準備書補正→評価書作成・主務大臣確認・公告縦覧",                        statutory:true,  juran:true  },
+  { id:6, short:"事後調査", label:"事後調査・報告書",   color:"#0891B2", desc:"工事中・供用後モニタリング・報告書（法第38条の2）",                    statutory:true,  juran:false },
 ];
+
+// 第一種/第二種事業の規模区分（環境影響評価法施行令）
+const PROJECT_CLASS_THRESHOLDS = {
+  wind:     { class1:"「出力50,000kW以上」または「海域内」",   class2:"出力22,500kW以上50,000kW未満" },
+  solar:    { class1:"出力250,000kW以上",                        class2:"出力100,000kW以上250,000kW未満" },
+  road:     { class1:"4車線以上・延長10km以上",                  class2:"4車線以上・延長7.5km以上" },
+  rail:     { class1:"新幹線または延長20km以上",                  class2:"延長15km以上" },
+  airport:  { class1:"滑走路長2,500m以上",                        class2:"滑走路長1,875m以上" },
+  dam:      { class1:"貯水量6,000万m³以上 または ダム高さ100m以上", class2:"貯水量4,500万m³以上" },
+  thermal:  { class1:"出力150,000kW以上",                        class2:"出力112,500kW以上" },
+  hydro:    { class1:"出力30,000kW以上",                          class2:"出力22,500kW以上" },
+  geo:      { class1:"出力10,000kW以上",                          class2:"出力7,500kW以上" },
+  port:     { class1:"港湾計画（国際拠点・重要港湾）",            class2:"地方港湾" },
+  reclaim:  { class1:"面積50ha以上",                              class2:"面積37.5ha以上" },
+  waste:    { class1:"日処理量300t以上",                          class2:"日処理量225t以上" },
+  housing:  { class1:"面積100ha以上",                             class2:"面積75ha以上" },
+  industry: { class1:"面積100ha以上",                             class2:"面積75ha以上" },
+  other:    { class1:"事業規模による（要個別確認）",              class2:"事業規模による（要個別確認）" },
+};
 
 const ROLE_CFG = {
   admin:    { label:"管理者",                    color:C.primary, badge:C.light },
@@ -137,7 +158,42 @@ const STATUS_CFG = {
   LC:{ label:"軽度懸念",     c:"#065F46", bg:"#D1FAE5" },
 };
 
-const TYPE_ICONS = { wind:"💨", road:"🛣️", port:"⚓", dam:"🌊", rail:"🚄", solar:"☀️" };
+// 環境影響評価法施行令 別表 – 対象事業種
+const TYPE_ICONS = {
+  wind:"💨", solar:"☀️", thermal:"🔥", hydro:"💧", geo:"🌋", nuclear:"⚛️",
+  road:"🛣️", rail:"🚄", airport:"✈️",
+  dam:"🌊", river:"🏞️",
+  port:"⚓", reclaim:"🏗️",
+  waste:"♻️", housing:"🏘️", industry:"🏭", landadj:"📐",
+  other:"📋"
+};
+
+// 全事業種別（施行令準拠）
+const ALL_PROJECT_TYPES = [
+  // 発電所
+  { v:"wind",    g:"発電所", l:"💨 風力発電所" },
+  { v:"solar",   g:"発電所", l:"☀️ 太陽光発電所" },
+  { v:"thermal", g:"発電所", l:"🔥 火力発電所" },
+  { v:"hydro",   g:"発電所", l:"💧 水力発電所" },
+  { v:"geo",     g:"発電所", l:"🌋 地熱発電所" },
+  { v:"nuclear", g:"発電所", l:"⚛️ 原子力発電所" },
+  // インフラ
+  { v:"road",    g:"インフラ", l:"🛣️ 道路" },
+  { v:"rail",    g:"インフラ", l:"🚄 鉄道" },
+  { v:"airport", g:"インフラ", l:"✈️ 飛行場" },
+  { v:"dam",     g:"インフラ", l:"🌊 ダム・堰" },
+  { v:"river",   g:"インフラ", l:"🏞️ 河川工作物" },
+  { v:"port",    g:"インフラ", l:"⚓ 港湾計画" },
+  // 土地開発
+  { v:"reclaim", g:"土地開発", l:"🏗️ 埋立・干拓" },
+  { v:"housing", g:"土地開発", l:"🏘️ 新住宅市街地開発" },
+  { v:"industry",g:"土地開発", l:"🏭 工業団地造成" },
+  { v:"landadj", g:"土地開発", l:"📐 土地区画整理" },
+  // 廃棄物処理
+  { v:"waste",   g:"廃棄物", l:"♻️ ごみ処理施設" },
+  // その他
+  { v:"other",   g:"その他", l:"📋 その他（個別判断）" },
+];
 const RISK_CFG = {
   high:  { label:"高リスク", c:C.red,   bg:C.redLight },
   medium:{ label:"中リスク", c:C.amber, bg:C.amberLight },
@@ -161,69 +217,71 @@ const SURVEY_TYPES = [
   { id:"custom", label:"カスタム",       icon:"⚙️", color:"#6B7280" },
 ];
 
+// ── 法定EIAタスクテンプレート（環境影響評価法・基本的事項準拠）──────────────────
+// 段階1=配慮書 / 2=方法書 / 3=現地調査 / 4=準備書 / 5=評価書 / 6=事後調査
 const TEMPLATE_TASKS = {
+  // ── 生物調査（基本的事項・生物多様性準拠）────────────────────────────────
   bio: {
-    1: ["事業の目的・内容・規模の整理","対象地域の地形・土地利用の把握","生息地感度スクリーニング（デスクトップ調査）","配慮書（生物多様性章）の作成","主務大臣への配慮書提出"],
-    2: ["調査対象種群の選定（環境省指針に基づく）","調査手法・調査時期・調査地点の設計","方法書の公告・縦覧（30日間）","住民・行政からの意見収集","方法書の最終確定・主務大臣提出"],
-    3: ["春季調査の実施（植物・鳥類繁殖期）","夏季調査の実施（昆虫・両生類）","秋季調査の実施（哺乳類・植物結実期）","冬季調査の実施（越冬鳥類・魚類）","全確認種のデータ整理・同定確認"],
-    4: ["調査データの集計・解析","レッドリスト照合・保護種フラグ付け","環境影響予測・影響マトリクス作成","保全措置の検討","準備書（生物多様性章）の作成・提出"],
-    5: ["準備書の公告・縦覧（30日間）","住民説明会の開催","寄せられた意見の整理・回答書作成","主務大臣・都道府県知事への意見回答提出"],
-    6: ["評価書（生物多様性章）の最終作成","第三者専門家による査読・確認","許認可機関への評価書正式提出","評価書の公告・縦覧（30日間）"],
-    7: ["工事中モニタリング計画の策定","工事中モニタリング調査の実施","供用後モニタリング調査の実施（年1回）","モニタリング報告書の作成・提出"],
+    1: ["事業の目的・内容・規模の整理","対象地域の地形・土地利用・植生の把握（GIS・空中写真）","既存文献・レッドリスト・自然環境保全基礎調査の収集","生息地感度スクリーニング（デスクトップ調査）","配慮書（生物多様性章）の作成","主務大臣への配慮書提出（環境影響評価法第3条の7）","都道府県知事への送付"],
+    2: ["調査対象種群の選定（基本的事項 別表1〜6準拠）","調査手法・季節区分・調査地点の設計","方法書の作成（法第5条）","方法書の公告・縦覧（30日間）（法第6条）","説明会の開催（法第7条）","住民意見書の受付・整理","都道府県知事意見の受理（法第9条）","方法書の最終確定・主務大臣提出（法第10条）"],
+    3: ["春季調査の実施（植物・鳥類繁殖期：3〜6月）","夏季調査の実施（昆虫・両生類・爬虫類：7〜8月）","秋季調査の実施（哺乳類・植物結実期：9〜11月）","冬季調査の実施（越冬鳥類・魚類・植物：12〜2月）","猛禽類の繁殖調査（年間を通じた定点観察）","水生生物調査（魚類・底生生物・付着藻類）","植生図の作成（1/2500以上）","全確認種のデータ整理・同定確認・写真整理"],
+    4: ["確認種データの集計・多様性指数の算出","環境省・都道府県レッドリスト照合・保護種フラグ付け","特定第二種国内希少野生動植物の確認","植物：改変面積・個体数・代替植生の影響予測","動物：行動圏・移動経路・繁殖期への影響予測","生態系：キーストーン種・食物連鎖への影響評価","環境影響マトリクスの作成","保全措置の検討（回避→低減→代償の序列）","環境保全目標との整合確認","準備書（生物多様性章）の作成（法第14条）","準備書の公告・縦覧（30日間）（法第16条）","説明会の開催（法第17条）","住民意見書の受付・整理","都道府県知事意見の受理（4ヶ月以内）（法第19条）","環境大臣意見の受理（必要に応じ）（法第20条）","事業者の見解書の作成・送付（法第21条）"],
+    5: ["準備書の補正・評価書の作成（法第22条）","評価書の主務大臣確認（法第23条）","評価書の公告・縦覧（30日間）（法第26条）","縦覧対応・問い合わせへの対応","許認可申請への評価書添付","許認可機関への評価書送付"],
+    6: ["工事中モニタリング計画の策定（法第38条の2）","重要種のモニタリング調査（工事中・年1〜2回）","植生回復・緑化の状況確認","供用後モニタリング調査（供用後3〜5年間・年1回）","モニタリング結果の報告書作成","主務大臣への事後調査報告書提出","保全措置の有効性評価・追加措置の検討"],
   },
+  // ── 騒音・振動調査（JIS Z 8731・環境基準準拠）──────────────────────────
   noise: {
-    1: ["事業概要・発生源の整理","現地踏査・測定地点候補の選定","既存騒音・振動データの収集","配慮書（騒音・振動章）の作成","主務大臣への配慮書提出"],
-    2: ["JIS Z 8731に基づく測定計画の策定","敏感受容体（学校・病院・住宅）のリストアップ","測定機材の選定・キャリブレーション計画","方法書の公告・縦覧（30日間）","方法書の最終確定・提出"],
-    3: ["昼間・夜間・早朝の現地騒音測定","工事機械・交通騒音の発生源測定","振動レベル測定（鉛直方向）","暗騒音・バックグラウンドの測定","測定データの整理・QC"],
-    4: ["騒音・振動の影響予測計算（音源モデリング）","環境基準との比較評価","振動感覚閾値・規制基準との照合","防音壁・振動対策の検討","準備書（騒音・振動章）の作成"],
-    5: ["準備書の公告・縦覧","住民説明会の実施","苦情・意見への対応","意見回答書の提出"],
-    6: ["評価書の最終作成","専門家査読","評価書の正式提出","縦覧・公告"],
-    7: ["工事中騒音モニタリング","苦情対応記録の管理","供用後モニタリング","年次報告書の作成・提出"],
+    1: ["事業概要・発生源の整理","現地踏査・測定地点候補の選定","既存騒音・振動データの収集（環境省・市区町村常時監視データ）","感受性の高い施設（学校・病院・住宅）のリストアップ","配慮書（騒音・振動章）の作成","主務大臣への配慮書提出"],
+    2: ["JIS Z 8731（騒音レベル測定）・ISO 8041（振動）に基づく測定計画の策定","騒音に係る環境基準の地域類型の確認","振動規制法の規制区域の確認","測定機材の選定・キャリブレーション計画","方法書の作成・公告・縦覧（30日間）","住民意見収集","方法書の最終確定・提出"],
+    3: ["昼間・夜間・早朝の等価騒音レベル（LAeq）測定","工事機械（建設機械騒音）の発生源測定","交通騒音のロードサイド測定","振動レベルL10・L50・L90の測定（鉛直方向）","暗騒音・バックグラウンドの測定（複数日）","低周波音測定（必要に応じ）","測定データの整理・QC・統計処理"],
+    4: ["工事騒音・振動の影響予測（音源モデリング・伝搬計算）","道路交通騒音の予測（ASJ RTN-Model 2018準拠）","振動感覚閾値・規制基準との照合","建設機械騒音予測（距離減衰式）","低周波音の評価","防音壁・振動対策（防振材・減振路盤）の検討","準備書（騒音・振動章）の作成・公告・縦覧（30日間）","住民意見収集・知事意見受理","事業者見解書の作成・提出"],
+    5: ["評価書（騒音・振動章）の最終作成・補正","専門家査読・確認","主務大臣確認","評価書の公告・縦覧（30日間）","許認可申請添付"],
+    6: ["工事中騒音モニタリング（JIS Z 8731準拠・月1回以上）","振動モニタリング（規制基準超過時は即時対応）","苦情対応記録の管理","供用後騒音モニタリング（年1回）","年次報告書の作成・提出"],
   },
-  asb: {
-    1: ["建物・施設の使用年代・建材の予備調査","石綿含有建材使用図面の収集","石綿分析機関の選定","事前調査計画書の作成","所轄労働基準監督署への事前届出（大気汚染防止法）"],
-    2: ["石綿含有建材の目視・書面調査","サンプリング地点の選定","位相差顕微鏡・電子顕微鏡分析計画","分析方法書の作成","調査前の安全衛生計画"],
-    3: ["1次調査：目視・書面による石綿使用状況確認","2次調査：サンプリング・分析（フリアブル/非フリアブル）","レベル1（吹付け）・レベル2（保温材）・レベル3（床材等）の区分","石綿含有建材の数量・状態の記録","飛散性リスクの評価"],
-    4: ["石綿含有材料の総量集計","飛散リスクレベルの評価（高・中・低）","除去・封じ込め・囲い込み工法の比較検討","除去費用概算の算定","石綿事前調査結果報告書の作成（大防法・石石綿則）"],
-    5: ["報告書の行政提出（都道府県・市区町村）","建築物解体等作業の事前届出（石石綿則第5条）","住民・関係者への説明","意見・質問への回答"],
-    6: ["最終報告書の作成","石綿含有建材調査者署名・捺印","解体施工者への引継ぎ資料の整備","台帳・記録の保管計画"],
-    7: ["解体工事中の空気中石綿濃度モニタリング","作業記録・廃棄物マニフェストの管理","最終クリアランス検査","記録の30年保管"],
-  },
-  river: {
-    1: ["流域・集水域の地形・地質情報の収集","既存河川データ（水量・水質・生物）の整理","利水・治水の現状把握","配慮書（水環境章）の作成","所管河川管理者への事前協議"],
-    2: ["調査断面・採水地点の設計","魚類・底生生物・付着藻類の調査手法選定","水質測定項目の選定（環境省河川水質測定指針準拠）","流量測定方法の決定","方法書の確定・提出"],
-    3: ["水質測定（BOD・COD・SS・重金属等）","流量・流速測定","魚類電気ショッカー調査または投網調査","底生生物（ベントス）のサーバー網採取","付着藻類・植物プランクトンの採取・同定","河岸植生調査"],
-    4: ["水質データの環境基準（類型）との照合","魚類・底生生物の種組成・多様性指数の算出","河川生態系の健全度評価","事業による流況変化・水質影響の予測","保全措置の検討"],
-    5: ["準備書（水環境章）の公告・縦覧","漁業協同組合・水利権者への説明","意見収集・回答","準備書の最終確定・提出"],
-    6: ["評価書の最終作成","専門家・行政機関査読","正式提出・公告","縦覧対応"],
-    7: ["工事中水質モニタリング（月1回）","濁水・土砂流出の監視","魚類等生息状況の追跡調査（年1回）","事後調査報告書の作成・提出"],
-  },
-  soil: {
-    1: ["土地利用履歴調査（土対法・ASTM Phase I相当）","地質・水文地質情報の収集","汚染リスクのある物質・施設の特定","概況調査計画書の作成","都道府県知事への調査開始届出（土対法）"],
-    2: ["サンプリング地点の設計（グリッドサンプリング）","分析項目の選定（土対法特定有害物質25種）","地下水モニタリング計画","調査機関の選定（土対法指定調査機関）","方法書の確定"],
-    3: ["ボーリング調査・土壌サンプリング","地下水サンプリング（観測井設置）","土壌ガス調査（VOC）","分析機関への試料送付","分析結果の受領・QC確認"],
-    4: ["土壌・地下水の溶出量基準・含有量基準との照合","汚染状況の3次元マッピング","健康リスク評価（暴露経路分析）","浄化対策工法の比較検討（コスト・期間・効果）","調査報告書の作成"],
-    5: ["土地利用制限・指定区域の指定申請","周辺住民・地権者への説明","行政窓口との協議","意見への対応"],
-    6: ["土地汚染状況調査結果報告書の正式提出","形質変更時要届出区域または要措置区域の指定対応","浄化措置計画書の作成・提出","認可申請"],
-    7: ["浄化工事中のモニタリング","地下水のポストモニタリング（四半期ごと）","浄化完了確認調査","土壌汚染台帳の更新手続き"],
-  },
+  // ── 大気質調査（大気汚染防止法・環境基準準拠）──────────────────────────
   air: {
-    1: ["気象・大気拡散条件の予備調査","排出源・排出物質の特定","周辺の大気環境基準適用地域の確認","配慮書（大気質章）の作成","行政事前協議"],
-    2: ["大気質測定計画の策定（環境省大気汚染常時監視マニュアル準拠）","測定地点の選定（排出源の風上・風下）","測定物質の選定（NO2・SPM・PM2.5・VOC等）","測定機器の選定・キャリブレーション計画","方法書の確定"],
-    3: ["大気質の現地測定（季節別・年4回）","気象観測（風向・風速・日射量・気温）","粉じん・飛散物質の測定","悪臭調査（嗅覚測定法）","測定データの整理・QC"],
-    4: ["大気拡散モデルによる影響予測（METI-LIS等）","環境基準・排出基準との照合","健康リスク評価","低減措置（高煙突・脱硫・脱硝装置等）の検討","準備書（大気質章）の作成"],
-    5: ["準備書の公告・縦覧","住民説明会","意見収集・回答書","提出"],
-    6: ["評価書の最終作成","専門家査読","正式提出","公告・縦覧"],
-    7: ["工事中粉じんモニタリング","供用後大気質モニタリング（年1回）","排出基準遵守状況の確認","年次報告書の作成"],
+    1: ["気象・大気拡散条件の予備調査（AMeDAS・地域気候データ）","排出源・排出物質の特定（NOx・SOx・SPM・PM2.5・VOC・悪臭）","周辺の大気環境基準適用地域・工業地域の確認","配慮書（大気質章）の作成","行政事前協議"],
+    2: ["大気質測定計画の策定（環境省大気汚染常時監視マニュアル準拠）","測定地点の選定（排出源の風上・風下・沿道）","測定物質の選定（NO2・SO2・CO・SPM・PM2.5・Ox等）","気象観測計画（風向・風速・日射量・気温）","測定機器の選定・キャリブレーション計画","方法書の作成・公告・縦覧（30日間）","方法書の確定・提出"],
+    3: ["大気質の現地測定（季節別・年4回以上）","気象観測（連続観測器設置）","粉じん・飛散物質の測定","悪臭調査（嗅覚測定法・官能試験）","有害大気汚染物質のサンプリング","測定データの整理・QC"],
+    4: ["大気拡散モデルによる影響予測（METI-LIS・ADMS等）","環境基準・排出基準・TLV との照合","建設工事粉じんの影響予測","健康リスク評価（ベンゼン・ダイオキシン等）","低減措置（高煙突・脱硫・脱硝・袋フィルター等）の検討","準備書（大気質章）の作成・公告・縦覧（30日間）","住民意見収集・知事意見受理","事業者見解書の作成・提出"],
+    5: ["評価書（大気質章）の最終作成","専門家査読","主務大臣確認","公告・縦覧（30日間）","大気汚染防止法届出添付"],
+    6: ["工事中粉じんモニタリング（散水等対策の確認）","供用後大気質モニタリング（年1回）","排出基準遵守状況の確認","常時監視との比較評価","年次報告書の作成・提出"],
   },
+  // ── 水質・河川調査（水質汚濁防止法・環境基準準拠）──────────────────────
+  river: {
+    1: ["流域・集水域の地形・地質情報の収集","既存河川データ（水量・水質・生物）の整理","水質汚濁に係る環境基準（類型指定）の確認","利水・治水の現状把握","配慮書（水環境章）の作成","所管河川管理者への事前協議"],
+    2: ["調査断面・採水地点の設計","魚類・底生生物・付着藻類・植物プランクトンの調査手法選定","水質測定項目の選定（環境省河川水質測定指針準拠・28項目以上）","流量測定方法の決定（電磁流速計・浮子法）","底質調査の計画","方法書の作成・公告・縦覧（30日間）","漁業協同組合・水利権者への事前説明","方法書の確定・提出"],
+    3: ["水質測定（BOD・COD・SS・DO・pH・大腸菌・重金属等）","流量・流速測定","魚類電気ショッカー調査または投網調査（春・秋）","底生生物（ベントス）のサーバー網採取","付着藻類・植物プランクトンの採取・同定","河岸植生調査","底質調査（COD・硫化物・重金属）","水温・塩分・濁度の連続観測"],
+    4: ["水質データの環境基準との照合（BOD・COD・SS等）","魚類・底生生物の種組成・多様性指数の算出","水生生態系健全度の評価（BQI・PTSIなど）","事業による流況変化・水質影響の予測（数値モデル）","湖沼・ダム貯水池の富栄養化予測","保全措置の検討（仮設防砂堰・濁水処理）","準備書（水環境章）の作成・公告・縦覧（30日間）","漁業協同組合・水利権者への説明","住民意見収集・知事意見受理","事業者見解書の作成・提出"],
+    5: ["評価書（水環境章）の最終作成","専門家査読","主務大臣確認","公告・縦覧（30日間）","水質汚濁防止法届出添付"],
+    6: ["工事中水質モニタリング（月2回以上）","濁水・土砂流出の監視・記録","魚類等生息状況の追跡調査（年1回）","底生生物モニタリング","事後調査報告書の作成・提出"],
+  },
+  // ── 土壌汚染調査（土壌汚染対策法準拠）──────────────────────────────────
+  soil: {
+    1: ["土地利用履歴調査（土対法・ASTM E1527 Phase I相当）","地質・水文地質情報の収集","汚染リスク物質・施設の特定（特定有害物質25種）","概況調査計画書の作成","都道府県知事への調査計画書提出（土対法第3条・4条）"],
+    2: ["サンプリング地点の設計（グリッドサンプリング10m or 30m格子）","分析項目の選定（土対法特定有害物質25種・溶出量基準・含有量基準）","地下水モニタリング計画（観測井の設計）","指定調査機関の選定（土壌汚染対策法指定）","調査工程・安全衛生計画","方法書の確定"],
+    3: ["ボーリング調査・土壌サンプリング（深度別）","地下水サンプリング（観測井設置・汲み上げ）","土壌ガス調査（VOC・四塩化炭素等）","分析機関への試料送付（指定分析方法）","分析結果の受領・QC確認","追加調査の判断"],
+    4: ["土壌・地下水の溶出量基準・含有量基準との照合","汚染状況の3次元マッピング","汚染土量の算定","健康リスク評価（暴露経路分析）","浄化対策工法の比較検討（コスト・期間・効果）（掘削除去・土壌洗浄・原位置浄化・封じ込め）","土地利用制限・指定区域の指定申請（土対法第11条）","土壌汚染状況調査結果報告書の作成","都道府県知事への提出"],
+    5: ["形質変更時要届出区域または要措置区域の指定対応","周辺住民・地権者への説明","浄化措置計画書の作成・提出（土対法第18条）","認可申請","行政窓口との協議"],
+    6: ["浄化工事中のモニタリング（月1回）","地下水のポストモニタリング（四半期ごと）","浄化完了確認調査（土対法指定調査機関）","浄化完了証明書の取得","土壌汚染台帳の更新手続き（土対法第34条）"],
+  },
+  // ── アスベスト調査（大気汚染防止法・石綿障害予防規則準拠）──────────────
+  asb: {
+    1: ["建物・施設の使用年代・建材の予備調査（1975年以前の建物は特に注意）","石綿含有建材使用図面・仕様書の収集","石綿分析機関の選定（環境計量証明事業所）","事前調査計画書の作成","所轄労働基準監督署への事前届出（大防法第18条の15）"],
+    2: ["石綿含有建材の目視・書面調査計画","サンプリング地点・部位の選定（レベル1〜3別）","位相差顕微鏡・偏光顕微鏡・走査型電子顕微鏡分析計画","分析方法書の作成（JIS A 1481準拠）","調査前の安全衛生計画（作業主任者・保護具）"],
+    3: ["レベル1（吹付け）の目視・書面確認","レベル2（保温材・断熱材）の確認","レベル3（成形板・床材等）の確認","サンプリング採取・分析機関への送付","JIS A 1481-1〜6に基づく定量・定性分析","石綿含有建材の数量・状態・劣化度の記録","飛散性リスクの評価（飛散性3段階）"],
+    4: ["石綿含有材料の総量集計","飛散リスクレベルの評価","除去・封じ込め・囲い込み工法の比較検討","除去費用概算の算定","石綿事前調査結果報告書の作成（大防法・石綿則）","石綿含有建材調査者（国家資格）の署名・押印"],
+    5: ["報告書の行政提出（都道府県・政令市・市区町村）","建築物解体等作業届出（石綿則第5条・労安法第88条）","住民・関係者への説明","意見・質問への回答"],
+    6: ["除去工事中の空気中石綿濃度モニタリング（位相差顕微鏡法）","作業記録・廃棄物マニフェストの管理","最終クリアランス検査（位相差顕微鏡または電子顕微鏡）","クリアランス証明書の発行","記録の30年保管（石綿障害予防規則第35条）"],
+  },
+  // ── 生態系調査（TNFD LEAPアプローチ・基本的事項準拠）────────────────────
   eco: {
-    1: ["広域生態系・緑地ネットワークの情報収集","重要生態系（JNBPA・OECMエリア等）の確認","TNFD LEAPアプローチによる自然関連リスクの予備評価","配慮書の作成","主務大臣への提出"],
-    2: ["生態系調査手法（景観生態学・植生調査）の設計","キーストーン種・指標種の選定","生態系サービスの評価指標の設定","方法書の確定","公告・縦覧"],
-    3: ["植生詳細調査（コドラート法・ライントランセクト法）","鳥類・哺乳類の行動圏・移動経路調査","昆虫類（送粉者・分解者）の多様性調査","土壌・水文環境の調査","生態系機能評価（一次生産量・分解速度等）"],
-    4: ["生態系タイプ別の影響マトリクス作成","生態系サービスへの影響定量化","生物多様性オフセット・NbSの検討","TNFDレポーティング指標の算出","準備書の作成"],
-    5: ["公告・縦覧","自然保護団体・専門家への説明","意見収集・回答","提出"],
-    6: ["評価書の最終作成","TNFD整合レポートの作成","正式提出","公告"],
-    7: ["生態系モニタリング計画の実施","生態系サービスの継続評価","年次TNFDレポートの作成","修復成果の検証"],
+    1: ["広域生態系・緑地ネットワークの情報収集（第3回自然環境保全基礎調査等）","重要生態系（JNBPA・OECMエリア・ラムサール湿地等）の確認","TNFD LEAPアプローチによる自然関連依存・リスクの予備評価","生物多様性ホットスポット・生態系感受性の評価","配慮書（生態系章）の作成","主務大臣への提出"],
+    2: ["生態系調査手法（景観生態学・植生調査・動物調査）の設計","キーストーン種・指標種・傘種の選定","生態系サービス（供給・調節・文化・基盤）の評価指標の設定","TNFD開示指標の設定（SBI・SBTn等）","方法書の作成・公告・縦覧（30日間）","自然保護団体・専門家への事前説明","方法書の確定・提出"],
+    3: ["植生詳細調査（コドラート法・ライントランセクト法・1/2500植生図作成）","鳥類・哺乳類の行動圏・移動経路・採餌場調査","昆虫類（送粉者・分解者）の多様性調査","土壌動物・菌根菌の調査","河川・湿地の水文環境調査","生態系機能評価（一次生産量・分解速度・炭素貯留量）","炭素量・生態系サービス価値の試算"],
+    4: ["生態系タイプ別の影響マトリクス作成","生態系サービスへの影響定量化","生物多様性ネットポジティブ目標との整合確認","生物多様性オフセット・NbS（自然を基盤とした解決策）の検討","TNFDレポーティング指標の算出（Metric 1〜4）","準備書（生態系章）の作成・公告・縦覧（30日間）","自然保護団体・専門家への説明","住民意見収集・知事意見受理","事業者見解書の作成・提出"],
+    5: ["評価書（生態系章）の最終作成","TNFD整合アニュアルレポートの作成","専門家査読","主務大臣確認","公告・縦覧（30日間）"],
+    6: ["生態系モニタリング計画の実施（SBTn準拠）","重要種の追跡調査","生態系サービスの継続評価","修復成果の定量的検証","年次TNFDレポートの作成","主務大臣への事後調査報告書提出"],
   },
 };
 
@@ -238,7 +296,7 @@ function makeTasksFromLabels(labels) {
 function makeTasksForSurveyType(surveyType) {
   const base = TEMPLATE_TASKS[surveyType] || TEMPLATE_TASKS.bio;
   const result = {};
-  for (let s = 1; s <= 7; s++) {
+  for (let s = 1; s <= 6; s++) {
     result[s] = makeTasksFromLabels(base[s] || base[1]);
   }
   return result;
@@ -294,9 +352,9 @@ const makeInitialTasks = (stage) => ({
 }[stage] || []);
 
 const INIT_PROJECTS = [
-  { id:1, name:"北海道洋上風力発電EIA",  client:"J-Power株式会社",          type:"wind", stage:3, pref:"北海道", deadline:"2026-08-15", species:[], redListCount:0, risk:"high",   progress:42, manager:"田中 誠一", area:"2400", budget:"38000000", desc:"北海道沖合の洋上風力発電プロジェクト（45MW）の環境影響評価。渡り鳥ルートとの重複が課題。", tasks:{1:makeInitialTasks(1).map(t=>({...t,done:true})),2:makeInitialTasks(2).map(t=>({...t,done:true})),3:makeInitialTasks(3),4:makeInitialTasks(4),5:makeInitialTasks(5),6:makeInitialTasks(6),7:makeInitialTasks(7)}, comments:[], documents:[] },
-  { id:2, name:"東京湾岸道路拡張事業",   client:"東日本高速道路株式会社",    type:"road", stage:5, pref:"千葉県", deadline:"2026-05-30", species:[], redListCount:2, risk:"medium", progress:71, manager:"佐藤 由美", area:"580",   budget:"12500000", desc:"千葉県沿岸部の国道延伸工事。干潟・砂浜の希少種への影響評価が主要論点。", tasks:{1:makeInitialTasks(1).map(t=>({...t,done:true})),2:makeInitialTasks(2).map(t=>({...t,done:true})),3:makeInitialTasks(3).map(t=>({...t,done:true})),4:makeInitialTasks(4).map(t=>({...t,done:true})),5:makeInitialTasks(5),6:makeInitialTasks(6),7:makeInitialTasks(7)}, comments:[], documents:[] },
-  { id:3, name:"大阪湾埋立プロジェクト", client:"大林組",                    type:"port", stage:2, pref:"大阪府", deadline:"2027-02-28", species:[], redListCount:0, risk:"low",    progress:18, manager:"山田 健太", area:"340",   budget:"8200000",  desc:"大阪湾の港湾拡張に伴う埋立事業。海洋生物多様性への影響評価。", tasks:{1:makeInitialTasks(1).map(t=>({...t,done:true})),2:makeInitialTasks(2),3:makeInitialTasks(3),4:makeInitialTasks(4),5:makeInitialTasks(5),6:makeInitialTasks(6),7:makeInitialTasks(7)}, comments:[], documents:[] },
+  { id:1, name:"北海道洋上風力発電EIA",  client:"J-Power株式会社",          type:"wind", stage:3, pref:"北海道", deadline:"2026-08-15", species:[], redListCount:0, risk:"high",   progress:33, manager:"田中 誠一", area:"2400", budget:"38000000", desc:"北海道沖合の洋上風力発電プロジェクト（45MW）の環境影響評価。渡り鳥ルートとの重複が課題。", projectClass:"1", tasks:{1:makeInitialTasks(1).map(t=>({...t,done:true})),2:makeInitialTasks(2).map(t=>({...t,done:true})),3:makeInitialTasks(3),4:makeInitialTasks(4),5:makeInitialTasks(5),6:makeInitialTasks(6)}, comments:[], documents:[] },
+  { id:2, name:"東京湾岸道路拡張事業",   client:"東日本高速道路株式会社",    type:"road", stage:5, pref:"千葉県", deadline:"2026-05-30", species:[], redListCount:2, risk:"medium", progress:67, manager:"佐藤 由美", area:"580",   budget:"12500000", desc:"千葉県沿岸部の国道延伸工事。干潟・砂浜の希少種への影響評価が主要論点。", projectClass:"1", tasks:{1:makeInitialTasks(1).map(t=>({...t,done:true})),2:makeInitialTasks(2).map(t=>({...t,done:true})),3:makeInitialTasks(3).map(t=>({...t,done:true})),4:makeInitialTasks(4).map(t=>({...t,done:true})),5:makeInitialTasks(5),6:makeInitialTasks(6)}, comments:[], documents:[] },
+  { id:3, name:"大阪湾埋立プロジェクト", client:"大林組",                    type:"reclaim", stage:2, pref:"大阪府", deadline:"2027-02-28", species:[], redListCount:0, risk:"low",    progress:17, manager:"山田 健太", area:"340",   budget:"8200000",  desc:"大阪湾の港湾拡張に伴う埋立事業。海洋生物多様性への影響評価。", projectClass:"1", tasks:{1:makeInitialTasks(1).map(t=>({...t,done:true})),2:makeInitialTasks(2),3:makeInitialTasks(3),4:makeInitialTasks(4),5:makeInitialTasks(5),6:makeInitialTasks(6)}, comments:[], documents:[] },
 ];
 
 // ─── ATOMS ────────────────────────────────────────────────────────────────────
@@ -1240,6 +1298,33 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
               <div style={{ color:C.textMuted, fontSize:11 }}>タスク完了</div>
             </div>
           </div>
+          {/* 縦覧期限バナー */}
+          {cur?.juran && (() => {
+            const startDate = (project.juranDates||{})[`juran_${project.stage}`];
+            if(!startDate) return <div style={{ marginTop:12, padding:"8px 12px",
+              background:"rgba(255,255,255,0.5)", borderRadius:8,
+              border:`1px dashed ${cur.color}88`, fontSize:12, color:C.textMid }}>
+              📅 <strong>縦覧期間（30日間）の開始日を「プロジェクト情報」タブで設定してください</strong>
+              {" — "}法定手続き期限の自動計算が有効になります
+            </div>;
+            const endDate = new Date(new Date(startDate).getTime()+30*86400000).toISOString().split("T")[0];
+            const daysLeft = Math.ceil((new Date(endDate)-new Date())/86400000);
+            const govDeadline = project.stage===4
+              ? new Date(new Date(startDate).getTime()+150*86400000).toISOString().split("T")[0]
+              : null;
+            return <div style={{ marginTop:12, display:"flex", flexWrap:"wrap", gap:8 }}>
+              <div style={{ padding:"6px 12px", borderRadius:8, fontSize:12, fontWeight:700,
+                background: daysLeft<0?"#F3F4F6":daysLeft<=5?C.redLight:daysLeft<=14?C.amberLight:"rgba(255,255,255,0.6)",
+                color: daysLeft<0?C.textMuted:daysLeft<=5?C.red:daysLeft<=14?C.amber:cur.color,
+                border:`1px solid ${daysLeft<0?C.borderLight:daysLeft<=5?C.red+"44":daysLeft<=14?C.amber+"44":cur.color+"44"}` }}>
+                📋 縦覧終了：{endDate}{daysLeft<0?" （終了済）":` （残${daysLeft}日）`}
+              </div>
+              {govDeadline && <div style={{ padding:"6px 12px", borderRadius:8, fontSize:12, fontWeight:700,
+                background:C.purpleLight, color:C.purple, border:`1px solid ${C.purple}44` }}>
+                🏛️ 知事意見期限：{govDeadline}
+              </div>}
+            </div>;
+          })()}
           <div style={{ marginTop:14 }}>
             <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
               <span style={{ color:cur?.color, fontSize:12, fontWeight:600 }}>段階内進捗</span>
@@ -1596,6 +1681,98 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
           })}
         </Card>
       </div>
+
+      {/* ── 法的要件・縦覧期限カード ── */}
+      <Card style={{ gridColumn:"1/-1" }}>
+        <SLabel>法的要件・縦覧期限管理</SLabel>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))", gap:12, marginTop:12 }}>
+          {/* 事業区分 */}
+          <div style={{ background:C.bg, borderRadius:10, padding:"12px 14px",
+            border:`1px solid ${C.borderLight}` }}>
+            <div style={{ color:C.textMuted, fontSize:11, fontWeight:700,
+              fontFamily:"'DM Mono',monospace", letterSpacing:"0.05em", marginBottom:6 }}>
+              事業区分
+            </div>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+              {[["1","第一種事業"],["2","第二種事業"],["ordinance","条例のみ"]].map(([v,l])=>(
+                <button key={v} onClick={()=>push({...project,projectClass:v})}
+                  style={{ padding:"4px 10px", borderRadius:6, cursor:"pointer", fontSize:12,
+                    border:`1.5px solid ${(project.projectClass||"1")===v?C.primary:C.borderLight}`,
+                    background:(project.projectClass||"1")===v?C.primary:"transparent",
+                    color:(project.projectClass||"1")===v?C.white:C.textMuted, fontWeight:(project.projectClass||"1")===v?700:400,
+                    fontFamily:"'Noto Sans JP',sans-serif" }}>{l}</button>
+              ))}
+            </div>
+            {PROJECT_CLASS_THRESHOLDS[project.type] && (
+              <div style={{ color:C.textFaint, fontSize:11, marginTop:8, lineHeight:1.5 }}>
+                {(project.projectClass||"1")==="1"
+                  ? PROJECT_CLASS_THRESHOLDS[project.type].class1
+                  : PROJECT_CLASS_THRESHOLDS[project.type].class2}
+              </div>
+            )}
+          </div>
+
+          {/* 縦覧期間トラッカー */}
+          {projectStages.filter(s=>s.juran).map(s=>{
+            const startKey = `juran_${s.id}`;
+            const startDate = (project.juranDates||{})[startKey];
+            const endDate = startDate
+              ? new Date(new Date(startDate).getTime() + 30*86400000).toISOString().split("T")[0]
+              : null;
+            const govDeadline = s.id===4 && startDate
+              ? new Date(new Date(startDate).getTime() + (30+120)*86400000).toISOString().split("T")[0]
+              : null;
+            const today = new Date();
+            const daysLeft = endDate ? Math.ceil((new Date(endDate)-today)/86400000) : null;
+            const govDaysLeft = govDeadline ? Math.ceil((new Date(govDeadline)-today)/86400000) : null;
+            return <div key={s.id} style={{ background:C.bg, borderRadius:10,
+              padding:"12px 14px", border:`1px solid ${s.id===project.stage?s.color+"44":C.borderLight}` }}>
+              <div style={{ color:s.color, fontSize:11, fontWeight:700,
+                fontFamily:"'DM Mono',monospace", letterSpacing:"0.05em", marginBottom:6 }}>
+                第{s.id}段階 {s.label} — 公告縦覧期間
+              </div>
+              <div style={{ display:"flex", gap:6, alignItems:"center", marginBottom:6 }}>
+                <label style={{ color:C.textMuted, fontSize:12 }}>縦覧開始日：</label>
+                <input type="date" value={startDate||""}
+                  onChange={e=>push({...project, juranDates:{...(project.juranDates||{}), [startKey]:e.target.value}})}
+                  style={{ ...INP, fontSize:12, padding:"4px 8px", flex:1 }} />
+              </div>
+              {endDate && <div style={{ fontSize:12 }}>
+                <div style={{ color:C.textMid }}>縦覧終了日：<strong>{endDate}</strong>
+                  {daysLeft!==null && <span style={{ marginLeft:8,
+                    color:daysLeft<0?"#6B7280":daysLeft<=5?C.red:daysLeft<=14?C.amber:C.mid,
+                    fontWeight:700 }}>
+                    {daysLeft<0?"（終了済）":`残${daysLeft}日`}
+                  </span>}
+                </div>
+                {govDeadline && <div style={{ color:C.textMid, marginTop:4 }}>
+                  知事意見期限：<strong>{govDeadline}</strong>
+                  {govDaysLeft!==null && <span style={{ marginLeft:8,
+                    color:govDaysLeft<0?"#6B7280":govDaysLeft<=30?C.red:C.amber,
+                    fontWeight:700 }}>
+                    {govDaysLeft<0?"（期限終了）":`残${govDaysLeft}日`}
+                  </span>}
+                  <span style={{ color:C.textFaint, fontSize:11, marginLeft:4 }}>（縦覧終了後4ヶ月）</span>
+                </div>}
+              </div>}
+            </div>;
+          })}
+        </div>
+
+        {/* 地方条例チェック */}
+        <div style={{ marginTop:12, padding:"10px 14px", background:C.amberLight,
+          border:`1px solid ${C.amber}33`, borderRadius:8, fontSize:12 }}>
+          <span style={{ color:C.amber, fontWeight:700 }}>⚖️ 都道府県条例確認：</span>
+          <span style={{ color:C.textMid, marginLeft:6 }}>
+            {project.pref}では独自の環境アセスメント条例が存在する可能性があります。
+            <a href="https://www.env.go.jp/policy/assess/1-1jichitai/index.html"
+              target="_blank" rel="noreferrer"
+              style={{ color:C.blue, marginLeft:4, textDecoration:"none", fontWeight:600 }}>
+              環境省・地方公共団体アセス一覧 →
+            </a>
+          </span>
+        </div>
+      </Card>
     </div>}
 
     {/* ── TAB: SPECIES ── */}
@@ -2195,7 +2372,9 @@ function NewProjectModal({ onSave, onCancel, savedTemplates=[], onSaveTemplate, 
   const [d, setD] = useState({
     name:"", client:"", type:"wind", pref:"東京都",
     deadline:"2027-03-31", area:"", budget:"",
-    desc:"", manager:"", risk:"low"
+    desc:"", manager:"", risk:"low",
+    projectClass:"1",  // 第一種・第二種・条例のみ
+    juranDates:{},     // { stageId: "YYYY-MM-DD" } 縦覧開始日
   });
   const f = k => e => setD(p => ({...p,[k]:e.target.value}));
 
@@ -2298,10 +2477,11 @@ function NewProjectModal({ onSave, onCancel, savedTemplates=[], onSaveTemplate, 
             <div>
               <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>事業種別 *</label>
               <select value={d.type} onChange={f("type")} style={{ ...INP, fontSize:14 }}>
-                {[["wind","💨 風力発電"],["solar","☀️ 太陽光発電"],["road","🛣️ 道路"],
-                  ["dam","🌊 ダム"],["rail","🚄 鉄道"],["port","⚓ 港湾"]].map(([v,l])=>(
-                  <option key={v} value={v}>{l}</option>
-                ))}
+                {Object.entries(ALL_PROJECT_TYPES.reduce((acc,t)=>{
+                  acc[t.g]=acc[t.g]||[];acc[t.g].push(t);return acc;},{}))
+                  .map(([grp,types])=><optgroup key={grp} label={grp}>
+                    {types.map(t=><option key={t.v} value={t.v}>{t.l}</option>)}
+                  </optgroup>)}
               </select>
             </div>
             <div>
@@ -2337,6 +2517,34 @@ function NewProjectModal({ onSave, onCancel, savedTemplates=[], onSaveTemplate, 
             <div>
               <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>予算（円）</label>
               <input value={d.budget} onChange={f("budget")} placeholder="例：5000000" style={{ ...INP, fontSize:14 }} />
+            </div>
+            <div style={{ gridColumn:"1/-1" }}>
+              <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>
+                事業区分（環境影響評価法施行令）
+              </label>
+              <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:8 }}>
+                {[["1","第一種事業（EIA必須）"],["2","第二種事業（スクリーニング）"],["ordinance","条例アセスのみ"]].map(([v,l])=>(
+                  <label key={v} style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer",
+                    padding:"7px 14px", borderRadius:8,
+                    border:`2px solid ${d.projectClass===v?C.primary:C.borderLight}`,
+                    background:d.projectClass===v?C.light:"transparent",
+                    fontSize:13, fontWeight:d.projectClass===v?700:400 }}>
+                    <input type="radio" name="projectClass" value={v}
+                      checked={d.projectClass===v}
+                      onChange={()=>setD(p=>({...p,projectClass:v}))}
+                      style={{ accentColor:C.primary }} />
+                    {l}
+                  </label>
+                ))}
+              </div>
+              {PROJECT_CLASS_THRESHOLDS[d.type] && (
+                <div style={{ background:C.bg, border:`1px solid ${C.borderLight}`,
+                  borderRadius:8, padding:"8px 12px", fontSize:12, color:C.textMuted }}>
+                  <span style={{ fontWeight:700, color:C.textMid }}>参考規模区分：</span>
+                  {" "}第一種：{PROJECT_CLASS_THRESHOLDS[d.type].class1}
+                  {" ／ "}第二種：{PROJECT_CLASS_THRESHOLDS[d.type].class2}
+                </div>
+              )}
             </div>
           </div>
           <div style={{ marginBottom:20 }}>
@@ -2405,7 +2613,8 @@ function ScopingModule() {
         <SLabel>事業条件を入力</SLabel>
         {[
           { l:"事業種別", el:<select value={pType} onChange={e=>setPType(e.target.value)} style={{ ...INP,fontSize:14 }}>
-            {[["wind","風力発電"],["solar","太陽光"],["road","道路"],["dam","ダム"],["rail","鉄道"],["port","港湾"]].map(([v,l])=><option key={v} value={v}>{l}</option>)}</select> },
+            {Object.entries(ALL_PROJECT_TYPES.reduce((a,t)=>{a[t.g]=a[t.g]||[];a[t.g].push(t);return a;},{}))
+              .map(([grp,types])=><optgroup key={grp} label={grp}>{types.map(t=><option key={t.v} value={t.v}>{t.l}</option>)}</optgroup>)}</select> },
           { l:"都道府県", el:<select value={pref} onChange={e=>setPref(e.target.value)} style={{ ...INP,fontSize:14 }}>
             {["北海道","東京都","大阪府","愛知県","福岡県","沖縄県","長野県"].map(p=><option key={p}>{p}</option>)}</select> },
         ].map(f2 => <div key={f2.l} style={{ marginBottom:16 }}>
