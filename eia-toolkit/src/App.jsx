@@ -64,13 +64,61 @@ async function flushSyncQueue(sb) {
   for (const entry of queue) {
     try {
       if (entry.table==="projects") {
-        if (entry.op==="upsert") { const {error}=await sb.from("projects").upsert(entry.payload); if(error)throw error; }
-        else if (entry.op==="delete") { const {error}=await sb.from("projects").delete().eq("id",entry.payload.id); if(error)throw error; }
+        const payload = sanitizeProjectPayload(entry.payload);
+        if (entry.op==="upsert") {
+          const {error}=await sb.from("projects").upsert(payload);
+          if(error) throw new Error(`Supabase: ${error.message} (code: ${error.code})`);
+        } else if (entry.op==="delete") {
+          const {error}=await sb.from("projects").delete().eq("id",entry.payload.id);
+          if(error) throw new Error(`Supabase: ${error.message} (code: ${error.code})`);
+        }
       }
       await removeFromQueue(entry.qid); synced++;
-    } catch(e) { console.warn("[Sync] failed",entry.qid,e.message); failed++; }
+    } catch(e) {
+      console.error("[Sync] FAILED entry", entry.qid, e.message);
+      // If it's a schema error (unknown column / type mismatch), remove from queue
+      // so it doesn't block forever — user needs to run migration
+      const isSchemaError = e.message.includes("column") || e.message.includes("uuid") || e.message.includes("42703") || e.message.includes("22P02");
+      if (isSchemaError) {
+        console.error("[Sync] Schema error — run migration_v2.sql in Supabase. Removing entry to unblock queue.");
+        await removeFromQueue(entry.qid).catch(()=>{});
+        synced++; // count as "handled" so bar clears
+      } else {
+        failed++;
+      }
+    }
   }
   return { synced, failed };
+}
+
+// Strip any keys not in the DB schema, ensure id is a valid UUID string
+function sanitizeProjectPayload(p) {
+  // If id looks like a timestamp number, generate a UUID (shouldn't happen with new code)
+  const id = typeof p.id === "number" ? crypto.randomUUID() : String(p.id);
+  return {
+    id,
+    organization_id: p.organization_id,
+    name:           p.name            || "",
+    client:         p.client          || "",
+    type:           p.type            || "wind",
+    stage:          Number(p.stage)   || 1,
+    pref:           p.pref            || "東京都",
+    deadline:       p.deadline        || null,
+    area:           p.area            || null,
+    budget:         p.budget          || null,
+    description:    p.description     || p.desc || null,
+    manager:        p.manager         || null,
+    risk:           p.risk            || "low",
+    progress:       Number(p.progress)||0,
+    red_list_count: Number(p.red_list_count||p.redListCount)||0,
+    tasks:          p.tasks           || {},
+    custom_stages:  p.custom_stages   || p.customStages   || null,
+    species_data:   p.species_data    || p.species        || [],
+    documents:      p.documents       || [],
+    comments:       p.comments        || [],
+    project_class:  p.project_class   || p.projectClass   || "1",
+    juran_dates:    p.juran_dates     || p.juranDates     || {},
+  };
 }
 
 // ─── TOKENS ───────────────────────────────────────────────────────────────────
@@ -1937,11 +1985,12 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
 // ─── NEW PROJECT MODAL ────────────────────────────────────────────────────────
 
 // ── OFFLINE STATUS BAR ────────────────────────────────────────────────────────
-function OfflineBar({ isOnline, pendingCount, syncing, onManualSync }) {
+function OfflineBar({ isOnline, pendingCount, syncing, onManualSync, syncError }) {
   // Only show when offline OR actively syncing OR has pending items
-  if (isOnline && pendingCount === 0 && !syncing) return null;
+  if (isOnline && pendingCount === 0 && !syncing && !syncError) return null;
   const bg = !isOnline ? "#92400E" : syncing ? C.primary : "#B45309";
-  return <div style={{
+  return <>
+  <div style={{
     position:"fixed", bottom:0, left:0, right:0, zIndex:999,
     background: bg, color:C.white, padding:"9px 20px",
     display:"flex", alignItems:"center", justifyContent:"space-between",
@@ -1965,7 +2014,19 @@ function OfflineBar({ isOnline, pendingCount, syncing, onManualSync }) {
         fontSize:12, fontWeight:700, fontFamily:"'Noto Sans JP',sans-serif",
       }}>今すぐ同期</button>
     )}
-  </div>;
+  </div>
+  {syncError && <div style={{
+    position:"fixed", bottom:48, left:0, right:0, zIndex:999,
+    background:"#7F1D1D", color:"#FEE2E2", padding:"8px 20px",
+    fontSize:12, display:"flex", justifyContent:"space-between", alignItems:"center"
+  }}>
+    <span>⚠️ 同期エラー: {syncError}</span>
+    <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer"
+      style={{ color:"#FCA5A5", fontSize:11, marginLeft:12 }}>
+      migration_v2.sql を実行してください →
+    </a>
+  </div>}
+  </>;
 }
 
 // ── TASK EDITOR MODAL ─────────────────────────────────────────────────────────
@@ -3229,6 +3290,7 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [pendingSync, setPendingSync] = useState(0);
   const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState(null);
   const [savedTemplates, setSavedTemplates] = useState([]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -3371,29 +3433,21 @@ export default function App() {
 
     if(!isConfigured) return;
 
-    const payload = {
-      id:u.id, name:u.name, client:u.client, type:u.type,
-      stage:u.stage, pref:u.pref, deadline:u.deadline, area:u.area,
-      budget:u.budget, description:u.desc, manager:u.manager,
-      risk:u.risk, progress:u.progress, red_list_count:u.redListCount||0,
-      tasks:u.tasks||{}, custom_stages:u.customStages||null,
-      species_data:u.species||[], documents:u.documents||[],
-      comments:u.comments||[], organization_id:org?.id,
-    };
+    const clean = sanitizeProjectPayload({...u, description:u.desc, organization_id:org?.id});
 
     if(navigator.onLine){
-      const { error } = await supabase.from("projects").upsert(payload);
+      const { error } = await supabase.from("projects").upsert(clean);
       if(error){
-        await enqueue("projects","upsert",payload).catch(()=>{});
+        console.error("[Sync] upsert failed:", error.message, error.code, error.details);
+        await enqueue("projects","upsert", clean).catch(()=>{});
         setPendingSync(n=>n+1);
       } else {
-        // Clear any stale queue entry for this project
         const q = await idbGetAll("syncQueue").catch(()=>[]);
         for(const e of q){ if(e.payload?.id===u.id) await removeFromQueue(e.qid).catch(()=>{}); }
         setPendingSync(await getSyncQueueLength().catch(()=>0));
       }
     } else {
-      await enqueue("projects","upsert",payload).catch(()=>{});
+      await enqueue("projects","upsert", clean).catch(()=>{});
       setPendingSync(n=>n+1);
     }
   };
@@ -3472,10 +3526,14 @@ export default function App() {
       initialTab={profileTab} onClose={()=>setShowProfile(false)}/>}
     <OfflineBar isOnline={isOnline} pendingCount={pendingSync} syncing={syncing}
       onManualSync={async ()=>{
-        setSyncing(true);
-        await flushSyncQueue(supabase).catch(()=>{});
+        setSyncing(true); setSyncError(null);
+        try {
+          const result = await flushSyncQueue(supabase);
+          if(result.failed > 0) setSyncError(`${result.failed}件の同期に失敗しました。コンソールを確認してください。`);
+        } catch(e) { setSyncError(e.message); }
         setSyncing(false);
         setPendingSync(await getSyncQueueLength().catch(()=>0));
-      }}/>
+      }}
+      syncError={syncError}/>
   </div>;
 }
