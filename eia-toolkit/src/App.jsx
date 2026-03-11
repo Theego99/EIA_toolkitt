@@ -3315,44 +3315,71 @@ export default function App() {
   },[]);
 
   // ── Offline detection + sync ───────────────────────────────────────────────
+  // Ref to suppress Realtime echoes of our own writes
+  const recentlyWritten = React.useRef(new Set());
+
   useEffect(()=>{
-    // Load templates from IndexedDB on mount
+    // ── 1. Load templates ────────────────────────────────────────────────────
     getAllTemplates().then(setSavedTemplates).catch(()=>{});
 
-    // Load projects from IndexedDB — migrate any old numeric IDs to UUIDs
+    // ── 2. Load projects: IndexedDB first (instant), then Supabase (authoritative)
     getAllProjectsLocal().then(async local => {
-      if(local.length === 0) return;
+      // Migrate any legacy numeric IDs
       const migrated = [];
       for(const p of local){
-        if(typeof p.id === "number" || (typeof p.id === "string" && /^\d{10,}$/.test(p.id))){
-          // Old timestamp ID — assign a real UUID and re-save
-          const newId = crypto.randomUUID();
-          console.log("[Migration] Replacing numeric ID", p.id, "→", newId);
-          const fixed = {...p, id: newId};
+        if(typeof p.id === "number" || /^\d{10,}$/.test(String(p.id))){
+          const fixed = {...p, id: crypto.randomUUID()};
           await saveProjectLocal(fixed).catch(()=>{});
           await deleteProjectLocal(p.id).catch(()=>{});
           migrated.push(fixed);
         } else {
-          migrated.push(p);
+          migrated.push({...p, id: String(p.id)});
         }
       }
-      setProjects(migrated);
+      if(migrated.length > 0) setProjects(migrated);
     }).catch(()=>{});
 
-    // Flush stale queue on startup if already online
-    if(isConfigured && navigator.onLine){
-      getSyncQueueLength().then(async n => {
-        setPendingSync(n);
-        if(n > 0){ setSyncing(true); await flushSyncQueue(supabase).catch(()=>{}); setSyncing(false); setPendingSync(await getSyncQueueLength().catch(()=>0)); }
+    // ── 3. Fetch authoritative list from Supabase (replaces local state) ────
+    if(isConfigured){
+      supabase.auth.getSession().then(async ({ data:{ session } }) => {
+        if(!session) return;
+        const { data: rows, error } = await supabase
+          .from("projects")
+          .select("*")
+          .order("created_at", { ascending: false });
+        if(error){ console.error("[Load] Supabase fetch failed:", error.message); return; }
+        if(!rows?.length) return;
+        const mapped = rows.map(row => ({
+          id: String(row.id),
+          name: row.name, client: row.client, type: row.type,
+          stage: row.stage, pref: row.pref, deadline: row.deadline,
+          area: row.area, budget: row.budget, desc: row.description,
+          manager: row.manager, risk: row.risk, progress: row.progress,
+          redListCount: row.red_list_count||0, tasks: row.tasks||{},
+          customStages: row.custom_stages||null, species: row.species_data||[],
+          comments: row.comments||[], documents: row.documents||[],
+          projectClass: row.project_class||"1", juranDates: row.juran_dates||{},
+        }));
+        setProjects(mapped);
+        // Sync to IndexedDB
+        for(const p of mapped) saveProjectLocal(p).catch(()=>{});
+        // Flush any queued offline changes
+        const qLen = await getSyncQueueLength().catch(()=>0);
+        if(qLen > 0){
+          setSyncing(true);
+          await flushSyncQueue(supabase).catch(()=>{});
+          setSyncing(false);
+          setPendingSync(await getSyncQueueLength().catch(()=>0));
+        }
       }).catch(()=>{});
     }
 
-    // Online/offline listeners
+    // ── 4. Online/offline listeners ─────────────────────────────────────────
     const goOnline = async () => {
       setIsOnline(true);
       if(!isConfigured) return;
-      const count = await getSyncQueueLength().catch(()=>0);
-      if(count > 0){
+      const n = await getSyncQueueLength().catch(()=>0);
+      if(n > 0){
         setSyncing(true);
         await flushSyncQueue(supabase).catch(()=>{});
         setSyncing(false);
@@ -3360,11 +3387,10 @@ export default function App() {
       setPendingSync(await getSyncQueueLength().catch(()=>0));
     };
     const goOffline = () => setIsOnline(false);
-
     window.addEventListener("online",  goOnline);
     window.addEventListener("offline", goOffline);
 
-    // Poll pending count every 8s — also auto-flush if online
+    // ── 5. Poll queue every 10s ──────────────────────────────────────────────
     const poll = setInterval(async ()=>{
       const n = await getSyncQueueLength().catch(()=>0);
       setPendingSync(n);
@@ -3374,48 +3400,52 @@ export default function App() {
         setSyncing(false);
         setPendingSync(await getSyncQueueLength().catch(()=>0));
       }
-    }, 8000);
+    }, 10000);
 
-    // ── Supabase Realtime: receive project changes from OTHER devices ──
-    // We track IDs we just wrote ourselves so we don't double-add them
+    // ── 6. Realtime subscription ─────────────────────────────────────────────
     let realtimeSub = null;
     if(isConfigured){
       realtimeSub = supabase
-        .channel("projects-changes")
+        .channel("projects-live")
         .on("postgres_changes",
           { event:"*", schema:"public", table:"projects" },
           (payload) => {
             if(payload.eventType === "DELETE"){
-              const deletedId = String(payload.old.id);
-              setProjects(prev => prev.filter(p => String(p.id) !== deletedId));
-              deleteProjectLocal(deletedId).catch(()=>{});
-            } else {
-              const row = payload.new;
-              const incomingId = String(row.id);
-              const mapped = {
-                id: incomingId, name: row.name, client: row.client,
-                type: row.type, stage: row.stage, pref: row.pref,
-                deadline: row.deadline, area: row.area, budget: row.budget,
-                desc: row.description, manager: row.manager, risk: row.risk,
-                progress: row.progress, redListCount: row.red_list_count||0,
-                tasks: row.tasks||{}, customStages: row.custom_stages||null,
-                species: row.species_data||[], comments: row.comments||[],
-                documents: row.documents||[], projectClass: row.project_class||"1",
-                juranDates: row.juran_dates||{},
-              };
-              setProjects(prev => {
-                // Always upsert by ID — never duplicate
-                const idx = prev.findIndex(p => String(p.id) === incomingId);
-                if(idx >= 0){
-                  const next = [...prev];
-                  next[idx] = {...prev[idx], ...mapped};
-                  return next;
-                }
-                return [...prev, mapped];
-              });
-              setSelectedProject(cur => cur && String(cur.id)===incomingId ? {...cur,...mapped} : cur);
-              saveProjectLocal(mapped).catch(()=>{});
+              const did = String(payload.old.id);
+              setProjects(prev => prev.filter(p => String(p.id) !== did));
+              deleteProjectLocal(did).catch(()=>{});
+              return;
             }
+
+            const row = payload.new;
+            const rid = String(row.id);
+
+            // Suppress echo of our own writes
+            if(recentlyWritten.current.has(rid)){
+              recentlyWritten.current.delete(rid);
+              return;
+            }
+
+            const mapped = {
+              id: rid, name: row.name, client: row.client, type: row.type,
+              stage: row.stage, pref: row.pref, deadline: row.deadline,
+              area: row.area, budget: row.budget, desc: row.description,
+              manager: row.manager, risk: row.risk, progress: row.progress,
+              redListCount: row.red_list_count||0, tasks: row.tasks||{},
+              customStages: row.custom_stages||null, species: row.species_data||[],
+              comments: row.comments||[], documents: row.documents||[],
+              projectClass: row.project_class||"1", juranDates: row.juran_dates||{},
+            };
+
+            setProjects(prev => {
+              const idx = prev.findIndex(p => String(p.id) === rid);
+              if(idx >= 0){
+                const next = [...prev]; next[idx] = {...prev[idx], ...mapped}; return next;
+              }
+              return [...prev, mapped];
+            });
+            setSelectedProject(cur => cur && String(cur.id)===rid ? {...cur,...mapped} : cur);
+            saveProjectLocal(mapped).catch(()=>{});
           }
         )
         .subscribe();
@@ -3456,7 +3486,7 @@ export default function App() {
     const uid = String(proj.id);
     const u = {...proj, id: uid};
 
-    // Update state — upsert by ID, never duplicate
+    // Update local state — upsert by ID
     setProjects(p => {
       const idx = p.findIndex(x => String(x.id) === uid);
       if(idx >= 0){ const n=[...p]; n[idx]=u; return n; }
@@ -3467,12 +3497,26 @@ export default function App() {
 
     if(!isConfigured) return;
 
-    const clean = sanitizeProjectPayload({...u, description:u.desc, organization_id:org?.id});
+    // Get org_id — from org state or from profile lookup
+    const orgId = org?.id ?? (await supabase
+      .from("profiles").select("organization_id")
+      .eq("id",(await supabase.auth.getUser()).data.user?.id).single()
+      .then(r=>r.data?.organization_id).catch(()=>null));
+
+    if(!orgId){
+      console.error("[Sync] No organization_id — cannot write to Supabase");
+      return;
+    }
+
+    const clean = sanitizeProjectPayload({...u, description:u.desc, organization_id:orgId});
 
     if(navigator.onLine){
+      // Mark as recently written BEFORE the request so Realtime echo is suppressed
+      recentlyWritten.current.add(uid);
       const { error } = await supabase.from("projects").upsert(clean);
       if(error){
-        console.error("[Sync] upsert failed:", error.message, error.code, error.details);
+        recentlyWritten.current.delete(uid);
+        console.error("[Sync] upsert failed:", error.message, error.code);
         await enqueue("projects","upsert", clean).catch(()=>{});
         setPendingSync(n=>n+1);
       } else {
@@ -3480,6 +3524,8 @@ export default function App() {
         const q = await idbGetAll("syncQueue").catch(()=>[]);
         for(const e of q){ if(String(e.payload?.id)===uid) await removeFromQueue(e.qid).catch(()=>{}); }
         setPendingSync(await getSyncQueueLength().catch(()=>0));
+        // Auto-remove from recentlyWritten after 5s (Realtime should have arrived by then)
+        setTimeout(()=> recentlyWritten.current.delete(uid), 5000);
       }
     } else {
       await enqueue("projects","upsert", clean).catch(()=>{});
@@ -3494,14 +3540,16 @@ export default function App() {
       setSelectedProject(null); setActive("dashboard");
     }
     await deleteProjectLocal(id).catch(()=>{});
-    // Also remove any pending upsert for this project from the queue
+    // Clear any pending upsert for this project
     const q = await idbGetAll("syncQueue").catch(()=>[]);
     for(const e of q){ if(String(e.payload?.id)===id) await removeFromQueue(e.qid).catch(()=>{}); }
     setPendingSync(await getSyncQueueLength().catch(()=>0));
     if(isConfigured){
       if(navigator.onLine){
+        recentlyWritten.current.add(id);
         const { error } = await supabase.from("projects").delete().eq("id",id);
-        if(error) console.error("[Delete] failed:", error.message);
+        if(error){ console.error("[Delete] failed:", error.message); recentlyWritten.current.delete(id); }
+        else setTimeout(()=> recentlyWritten.current.delete(id), 5000);
       } else {
         await enqueue("projects","delete",{id}).catch(()=>{});
         setPendingSync(n=>n+1);
