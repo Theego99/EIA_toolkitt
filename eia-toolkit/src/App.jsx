@@ -3319,9 +3319,24 @@ export default function App() {
     // Load templates from IndexedDB on mount
     getAllTemplates().then(setSavedTemplates).catch(()=>{});
 
-    // Load projects from IndexedDB (works offline)
-    getAllProjectsLocal().then(local => {
-      if(local.length > 0) setProjects(local);
+    // Load projects from IndexedDB — migrate any old numeric IDs to UUIDs
+    getAllProjectsLocal().then(async local => {
+      if(local.length === 0) return;
+      const migrated = [];
+      for(const p of local){
+        if(typeof p.id === "number" || (typeof p.id === "string" && /^\d{10,}$/.test(p.id))){
+          // Old timestamp ID — assign a real UUID and re-save
+          const newId = crypto.randomUUID();
+          console.log("[Migration] Replacing numeric ID", p.id, "→", newId);
+          const fixed = {...p, id: newId};
+          await saveProjectLocal(fixed).catch(()=>{});
+          await deleteProjectLocal(p.id).catch(()=>{});
+          migrated.push(fixed);
+        } else {
+          migrated.push(p);
+        }
+      }
+      setProjects(migrated);
     }).catch(()=>{});
 
     // Flush stale queue on startup if already online
@@ -3361,7 +3376,8 @@ export default function App() {
       }
     }, 8000);
 
-    // ── Supabase Realtime: receive project changes from other devices ──
+    // ── Supabase Realtime: receive project changes from OTHER devices ──
+    // We track IDs we just wrote ourselves so we don't double-add them
     let realtimeSub = null;
     if(isConfigured){
       realtimeSub = supabase
@@ -3370,24 +3386,34 @@ export default function App() {
           { event:"*", schema:"public", table:"projects" },
           (payload) => {
             if(payload.eventType === "DELETE"){
-              setProjects(prev => prev.filter(p => p.id !== payload.old.id));
-              deleteProjectLocal(payload.old.id).catch(()=>{});
+              const deletedId = String(payload.old.id);
+              setProjects(prev => prev.filter(p => String(p.id) !== deletedId));
+              deleteProjectLocal(deletedId).catch(()=>{});
             } else {
               const row = payload.new;
+              const incomingId = String(row.id);
               const mapped = {
-                id: row.id, name: row.name, client: row.client,
+                id: incomingId, name: row.name, client: row.client,
                 type: row.type, stage: row.stage, pref: row.pref,
                 deadline: row.deadline, area: row.area, budget: row.budget,
                 desc: row.description, manager: row.manager, risk: row.risk,
                 progress: row.progress, redListCount: row.red_list_count||0,
                 tasks: row.tasks||{}, customStages: row.custom_stages||null,
-                species: row.species_data||[], comments: row.comments||[], documents: row.documents||[],
+                species: row.species_data||[], comments: row.comments||[],
+                documents: row.documents||[], projectClass: row.project_class||"1",
+                juranDates: row.juran_dates||{},
               };
               setProjects(prev => {
-                const exists = prev.find(p => p.id === mapped.id);
-                return exists ? prev.map(p => p.id===mapped.id ? {...p,...mapped} : p)
-                              : [...prev, mapped];
+                // Always upsert by ID — never duplicate
+                const idx = prev.findIndex(p => String(p.id) === incomingId);
+                if(idx >= 0){
+                  const next = [...prev];
+                  next[idx] = {...prev[idx], ...mapped};
+                  return next;
+                }
+                return [...prev, mapped];
               });
+              setSelectedProject(cur => cur && String(cur.id)===incomingId ? {...cur,...mapped} : cur);
               saveProjectLocal(mapped).catch(()=>{});
             }
           }
@@ -3426,9 +3452,17 @@ export default function App() {
   }}/>;
 
   const nav=v=>{setActive(v);if(v!=="project")setSelectedProject(null);};
-  const updateProject=async (u)=>{
-    setProjects(p=>p.map(x=>x.id===u.id?u:x));
-    setSelectedProject(u);
+  const updateProject=async (proj)=>{
+    const uid = String(proj.id);
+    const u = {...proj, id: uid};
+
+    // Update state — upsert by ID, never duplicate
+    setProjects(p => {
+      const idx = p.findIndex(x => String(x.id) === uid);
+      if(idx >= 0){ const n=[...p]; n[idx]=u; return n; }
+      return [...p, u];
+    });
+    setSelectedProject(cur => cur && String(cur.id)===uid ? u : cur);
     await saveProjectLocal(u).catch(()=>{});
 
     if(!isConfigured) return;
@@ -3442,8 +3476,9 @@ export default function App() {
         await enqueue("projects","upsert", clean).catch(()=>{});
         setPendingSync(n=>n+1);
       } else {
+        // Clear any stale queue entries for this project
         const q = await idbGetAll("syncQueue").catch(()=>[]);
-        for(const e of q){ if(e.payload?.id===u.id) await removeFromQueue(e.qid).catch(()=>{}); }
+        for(const e of q){ if(String(e.payload?.id)===uid) await removeFromQueue(e.qid).catch(()=>{}); }
         setPendingSync(await getSyncQueueLength().catch(()=>0));
       }
     } else {
@@ -3452,13 +3487,21 @@ export default function App() {
     }
   };
 
-  const handleDeleteProject = async (id) => {
-    setProjects(p => p.filter(x => x.id !== id));
-    if(selectedProject?.id === id){ setSelectedProject(null); setActive("dashboard"); }
+  const handleDeleteProject = async (rawId) => {
+    const id = String(rawId);
+    setProjects(p => p.filter(x => String(x.id) !== id));
+    if(selectedProject && String(selectedProject.id) === id){
+      setSelectedProject(null); setActive("dashboard");
+    }
     await deleteProjectLocal(id).catch(()=>{});
+    // Also remove any pending upsert for this project from the queue
+    const q = await idbGetAll("syncQueue").catch(()=>[]);
+    for(const e of q){ if(String(e.payload?.id)===id) await removeFromQueue(e.qid).catch(()=>{}); }
+    setPendingSync(await getSyncQueueLength().catch(()=>0));
     if(isConfigured){
-      if(isOnline){
-        await supabase.from("projects").delete().eq("id",id).catch(()=>{});
+      if(navigator.onLine){
+        const { error } = await supabase.from("projects").delete().eq("id",id);
+        if(error) console.error("[Delete] failed:", error.message);
       } else {
         await enqueue("projects","delete",{id}).catch(()=>{});
         setPendingSync(n=>n+1);
@@ -3515,11 +3558,17 @@ export default function App() {
       onSaveTemplate={handleSaveTemplate}
       onDeleteTemplate={handleDeleteTemplate}
       onSave={np=>{
-        // np.customStages and np.tasks already set by NewProjectModal
         const full = { ...np, species:[], redListCount:0, progress:0, comments:[], documents:[] };
-        setProjects(p=>[...p,full]);
+        // Add to local state immediately
+        setProjects(p => {
+          // Guard: never add if ID already exists
+          if(p.find(x => String(x.id)===String(full.id))) return p;
+          return [...p, full];
+        });
         saveProjectLocal(full).catch(()=>{});
         setShowNew(false);
+        // Write to Supabase (updateProject handles online/offline/queue)
+        updateProject(full).catch(()=>{});
       }}
       onCancel={()=>setShowNew(false)}/>}
     {showProfile&&<ProfileSettingsModal currentUser={currentUser}
