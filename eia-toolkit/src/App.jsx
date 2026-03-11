@@ -62,6 +62,13 @@ async function flushSyncQueue(sb) {
   const queue = await idbGetAll("syncQueue");
   let synced=0, failed=0;
   for (const entry of queue) {
+    // Drop zombie entries with numeric/timestamp IDs — can never succeed
+    const entryId = String(entry.payload?.id ?? "");
+    if (/^\d{10,}$/.test(entryId)) {
+      await removeFromQueue(entry.qid).catch(()=>{});
+      synced++;
+      continue;
+    }
     try {
       if (entry.table==="projects") {
         if (entry.op==="upsert") {
@@ -2461,7 +2468,7 @@ function NewProjectModal({ onSave, onCancel, savedTemplates=[], onSaveTemplate, 
     const tasksObj = {};
     stages.forEach(s => { tasksObj[s.id] = s.tasks; });
     onSave({
-      ...d, id: Date.now(), stage: stages[0]?.id || 1,
+      ...d, id: crypto.randomUUID(), stage: stages[0]?.id || 1,
       customStages: stages,
       tasks: tasksObj,
       species:[], redListCount:0, progress:0,
