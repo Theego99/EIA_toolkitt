@@ -767,6 +767,262 @@ function ProjectCard({ project, onClick, onDelete }) {
 }
 
 // ─── PROJECT DETAIL ───────────────────────────────────────────────────────────
+// ── DOCUMENT STATUS CONFIG ────────────────────────────────────────────────────
+const DOC_STATUSES = ["作業中","レビュー中","承認済","提出済","却下"];
+const DOC_STATUS_COLOR = {
+  "作業中":  { c:C.amber,   bg:C.amberLight },
+  "レビュー中":{ c:C.blue,    bg:C.blueLight },
+  "承認済":  { c:C.mid,     bg:C.light },
+  "提出済":  { c:C.primary, bg:C.light },
+  "却下":    { c:C.red,     bg:C.redLight },
+};
+
+const FILE_ICONS = {
+  pdf:"📕", docx:"📘", doc:"📘", xlsx:"📗", xls:"📗",
+  pptx:"📙", ppt:"📙", jpg:"🖼️", jpeg:"🖼️", png:"🖼️",
+  zip:"🗜️", csv:"📊", default:"📄"
+};
+function fileIcon(name) {
+  const ext = (name||"").split(".").pop().toLowerCase();
+  return FILE_ICONS[ext] || FILE_ICONS.default;
+}
+function fmtSize(bytes) {
+  if (!bytes) return "—";
+  if (bytes < 1024) return bytes+"B";
+  if (bytes < 1024*1024) return (bytes/1024).toFixed(1)+"KB";
+  return (bytes/(1024*1024)).toFixed(1)+"MB";
+}
+
+function DocumentsTab({ project, onUpdate }) {
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
+  const [uploading, setUploading]   = useState(false);
+  const [uploadProg, setUploadProg] = useState(0);
+  const [dragOver, setDragOver]     = useState(false);
+  const [editDoc, setEditDoc]       = useState(null); // doc being status-edited
+  const [filter, setFilter]         = useState("all");
+  const fileRef = React.useRef();
+
+  const docs = project.documents || [];
+
+  // ── helpers ─────────────────────────────────────────────────────────────
+  const saveDoc = (updated) => onUpdate({ ...project, documents: updated });
+
+  const addDocRecord = (file, url) => {
+    const doc = {
+      id: `doc_${Date.now()}`,
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      url,  // null if Supabase not configured — falls back to object URL
+      status: "作業中",
+      uploadedBy: "自分",
+      uploadedAt: new Date().toISOString().split("T")[0],
+      stage: project.stage,
+    };
+    saveDoc([...docs, doc]);
+  };
+
+  const deleteDoc = (id) => {
+    if (!window.confirm("このファイルを削除しますか？")) return;
+    saveDoc(docs.filter(d => d.id !== id));
+  };
+
+  const updateStatus = (id, status) => {
+    saveDoc(docs.map(d => d.id===id ? {...d, status} : d));
+    setEditDoc(null);
+  };
+
+  // ── upload ───────────────────────────────────────────────────────────────
+  const handleFiles = async (files) => {
+    for (const file of Array.from(files)) {
+      setUploading(true);
+      setUploadProg(0);
+
+      let url = null;
+      if (isConfigured) {
+        // Upload to Supabase Storage bucket "project-docs"
+        const path = `${project.id}/${Date.now()}_${file.name}`;
+        // Simulate progress (Supabase JS doesn't expose progress natively)
+        const prog = setInterval(() => setUploadProg(p => Math.min(p+15, 85)), 200);
+        const { data, error } = await supabase.storage
+          .from("project-docs")
+          .upload(path, file, { upsert: true });
+        clearInterval(prog);
+        if (!error) {
+          const { data: urlData } = supabase.storage
+            .from("project-docs")
+            .getPublicUrl(path);
+          url = urlData?.publicUrl || null;
+        }
+      } else {
+        // Demo mode: create object URL (works in-session)
+        url = URL.createObjectURL(file);
+        // Simulate upload
+        for (let i=0; i<=100; i+=20) {
+          await new Promise(r=>setTimeout(r,80));
+          setUploadProg(i);
+        }
+      }
+
+      setUploadProg(100);
+      addDocRecord(file, url);
+      await new Promise(r=>setTimeout(r,300));
+      setUploading(false);
+      setUploadProg(0);
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault(); setDragOver(false);
+    handleFiles(e.dataTransfer.files);
+  };
+
+  const handleDownload = (doc) => {
+    if (!doc.url) { alert("このファイルはダウンロードできません（URLなし）"); return; }
+    const a = document.createElement("a");
+    a.href = doc.url; a.download = doc.name; a.target = "_blank";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  };
+
+  // ── filtered list ────────────────────────────────────────────────────────
+  const filtered = filter==="all" ? docs
+    : filter==="stage" ? docs.filter(d=>d.stage===project.stage)
+    : docs.filter(d=>d.status===filter);
+
+  const stageCountMap = {};
+  docs.forEach(d=>{ stageCountMap[d.stage]=(stageCountMap[d.stage]||0)+1; });
+
+  return <div>
+    {/* Header */}
+    <div style={{ display:"flex", justifyContent:"space-between",
+      alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:10 }}>
+      <div>
+        <div style={{ color:C.text, fontSize:16, fontWeight:700,
+          fontFamily:"'Noto Serif JP',serif" }}>文書管理</div>
+        <div style={{ color:C.textMuted, fontSize:13, marginTop:2 }}>
+          {docs.length}件のファイル
+          {!isConfigured && <span style={{ color:C.amber, marginLeft:8,
+            fontSize:12 }}>⚠ デモモード（セッション中のみ保存）</span>}
+        </div>
+      </div>
+      <div style={{ display:"flex", gap:8 }}>
+        <Btn size="sm" icon="⬆" onClick={()=>fileRef.current?.click()}
+          disabled={uploading}>
+          {uploading ? `アップロード中 ${uploadProg}%` : "ファイルを追加"}
+        </Btn>
+      </div>
+      <input ref={fileRef} type="file" multiple style={{ display:"none" }}
+        onChange={e=>handleFiles(e.target.files)} />
+    </div>
+
+    {/* Filter pills */}
+    {docs.length > 0 && <div style={{ display:"flex", gap:6, marginBottom:14,
+      flexWrap:"wrap" }}>
+      {[["all","すべて"],["stage","この段階"],
+        ...DOC_STATUSES.map(s=>[s,s])].map(([k,v])=>(
+        <button key={k} onClick={()=>setFilter(k)} style={{
+          padding:"4px 12px", borderRadius:20, border:`1px solid ${filter===k?C.primary:C.borderLight}`,
+          background:filter===k?C.primary:C.surface, color:filter===k?C.white:C.textMuted,
+          cursor:"pointer", fontSize:12, fontFamily:"'Noto Sans JP',sans-serif",
+          fontWeight:filter===k?700:400 }}>{v}
+        </button>
+      ))}
+    </div>}
+
+    {/* Drop zone */}
+    <div onDrop={handleDrop} onDragOver={e=>{e.preventDefault();setDragOver(true);}}
+      onDragLeave={()=>setDragOver(false)}
+      onClick={()=>!uploading&&fileRef.current?.click()}
+      style={{ border:`2px dashed ${dragOver?C.primary:C.borderLight}`,
+        borderRadius:12, padding:"20px", textAlign:"center", marginBottom:16,
+        background:dragOver?C.light:C.bg, cursor:"pointer",
+        transition:"all 0.15s" }}>
+      {uploading
+        ? <div>
+            <div style={{ color:C.primary, fontWeight:700, marginBottom:8 }}>
+              アップロード中... {uploadProg}%
+            </div>
+            <div style={{ height:6, background:C.borderLight, borderRadius:3 }}>
+              <div style={{ height:"100%", borderRadius:3, background:C.primary,
+                width:`${uploadProg}%`, transition:"width 0.2s" }}/>
+            </div>
+          </div>
+        : <div style={{ color:C.textMuted, fontSize:13 }}>
+            <div style={{ fontSize:28, marginBottom:6 }}>📁</div>
+            ファイルをドラッグ＆ドロップ、またはクリックして選択
+            <div style={{ fontSize:12, color:C.textFaint, marginTop:4 }}>
+              PDF・Word・Excel・画像など対応
+            </div>
+          </div>
+      }
+    </div>
+
+    {/* Document list */}
+    {filtered.length === 0
+      ? <div style={{ color:C.textFaint, fontSize:13, textAlign:"center",
+          padding:"32px 0" }}>
+          {docs.length===0 ? "まだファイルがありません" : "該当するファイルなし"}
+        </div>
+      : filtered.map(doc => (
+        <div key={doc.id} style={{ display:"flex", alignItems:"center", gap:12,
+          padding:"12px 14px", background:C.surface, borderRadius:10, marginBottom:8,
+          border:`1px solid ${C.borderLight}`,
+          boxShadow:"0 1px 3px #0001" }}>
+          <span style={{ fontSize:24, flexShrink:0 }}>{fileIcon(doc.name)}</span>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ color:C.text, fontSize:14, fontWeight:600,
+              overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+              {doc.name}
+            </div>
+            <div style={{ color:C.textFaint, fontSize:11, marginTop:2,
+              display:"flex", gap:8, flexWrap:"wrap" }}>
+              <span>{fmtSize(doc.size)}</span>
+              <span>·</span>
+              <span>{doc.uploadedAt}</span>
+              <span>·</span>
+              <span>第{doc.stage}段階</span>
+              {doc.uploadedBy && <><span>·</span><span>{doc.uploadedBy}</span></>}
+            </div>
+          </div>
+          {/* Status badge — click to change */}
+          <div style={{ position:"relative", flexShrink:0 }}>
+            <div onClick={()=>setEditDoc(editDoc===doc.id?null:doc.id)}
+              style={{ cursor:"pointer" }}>
+              <Chip color={(DOC_STATUS_COLOR[doc.status]||{}).c||C.textMuted}
+                bg={(DOC_STATUS_COLOR[doc.status]||{}).bg||C.bg}>
+                {doc.status}▾
+              </Chip>
+            </div>
+            {editDoc===doc.id && <div style={{ position:"absolute", right:0, top:"100%",
+              marginTop:4, background:C.surface, border:`1px solid ${C.border}`,
+              borderRadius:8, boxShadow:C.shadowMd, zIndex:100, overflow:"hidden",
+              minWidth:110 }}>
+              {DOC_STATUSES.map(s=>(
+                <div key={s} onClick={()=>updateStatus(doc.id,s)}
+                  style={{ padding:"9px 14px", cursor:"pointer", fontSize:13,
+                    color:s===doc.status?C.primary:C.text, fontWeight:s===doc.status?700:400,
+                    background:s===doc.status?C.light:"transparent" }}
+                  onMouseEnter={e=>e.currentTarget.style.background=C.bg}
+                  onMouseLeave={e=>e.currentTarget.style.background=s===doc.status?C.light:"transparent"}>
+                  {s}
+                </div>
+              ))}
+            </div>}
+          </div>
+          {/* Actions */}
+          <div style={{ display:"flex", gap:4, flexShrink:0 }}>
+            {doc.url && <Btn variant="ghost" size="sm"
+              onClick={()=>handleDownload(doc)}>⬇</Btn>}
+            <Btn variant="danger" size="sm"
+              onClick={()=>deleteDoc(doc.id)}>✕</Btn>
+          </div>
+        </div>
+      ))
+    }
+  </div>;
+}
+
+
 function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTemplate }) {
   const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const [project, setProject] = useState(initProject);
@@ -785,8 +1041,8 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
   const [reportRunning, setReportRunning] = useState(false);
   const [editingTasks, setEditingTasks] = useState(false);
   const projectStages = project.customStages || STAGES;
-
-  const cur = STAGES.find(s=>s.id===project.stage);
+  const curStageIdx = projectStages.findIndex(s=>s.id===project.stage);
+  const cur = projectStages[curStageIdx];
   const stageTasks = project.tasks[project.stage] || [];
   const allDone = stageTasks.every(t=>t.done);
   const doneCount = stageTasks.filter(t=>t.done).length;
@@ -799,18 +1055,17 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
       [project.stage]: project.tasks[project.stage].map(t =>
         t.id===taskId ? {...t, done:!t.done} : t) };
     const allNowDone = newTasks[project.stage].every(t=>t.done);
-    // recalculate progress
-    const stagesCompleted = STAGES.filter(s => (s.id < project.stage) ||
+    const stagesCompleted = projectStages.filter(s => (s.id < project.stage) ||
       (s.id===project.stage && allNowDone)).length;
-    const newProgress = Math.round((stagesCompleted / 7) * 100);
+    const newProgress = Math.round((stagesCompleted / projectStages.length) * 100);
     push({ ...project, tasks:newTasks, progress:newProgress });
   };
 
   const advanceStage = () => {
-    if (project.stage >= 7) return;
-    const nextStage = project.stage + 1;
-    const stagesCompleted = nextStage - 1;
-    const newProgress = Math.round((stagesCompleted / 7) * 100);
+    const idx = projectStages.findIndex(s => s.id === project.stage);
+    if (idx < 0 || idx >= projectStages.length - 1) return;
+    const nextStage = projectStages[idx + 1].id;
+    const newProgress = Math.round((idx + 1) / projectStages.length * 100);
     push({ ...project, stage:nextStage, progress:newProgress });
   };
 
@@ -929,10 +1184,10 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
     <Card style={{ padding:"18px 24px", marginBottom:20 }}>
       <div style={{ display:"flex", justifyContent:"space-between",
         alignItems:"center", marginBottom:14 }}>
-        <SLabel>環境アセスメント法 — 法定7段階手続き</SLabel>
-        {allDone && project.stage < 7 && (
+        <SLabel>環境アセスメント法 — {projectStages.length}段階手続き</SLabel>
+        {allDone && curStageIdx < projectStages.length - 1 && (
           <Btn onClick={advanceStage} variant="primary" size="sm" icon="→">
-            次の段階へ進む（{STAGES[project.stage]?.short}へ）
+            次の段階へ進む（{projectStages[curStageIdx+1]?.short||projectStages[curStageIdx+1]?.label}へ）
           </Btn>
         )}
       </div>
@@ -1023,7 +1278,7 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
             <span style={{ color:task.done?C.textMuted:C.text, fontSize:14,
               textDecoration:task.done?"line-through":"none" }}>{task.label}</span>
           </div>)}
-          {allDone && project.stage < 7 && (
+          {allDone && curStageIdx < projectStages.length - 1 && (
             <div style={{ marginTop:16, padding:"14px 16px",
               background:C.light, border:`1px solid ${C.primary}44`,
               borderRadius:10, display:"flex", justifyContent:"space-between",
@@ -1033,7 +1288,7 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
                   ✅ この段階の全タスクが完了しました
                 </div>
                 <div style={{ color:C.textMuted, fontSize:13, marginTop:2 }}>
-                  次の段階「{STAGES[project.stage]?.label}」へ進む準備ができています
+                  次の段階「{projectStages[curStageIdx+1]?.label}」へ進む準備ができています
                 </div>
               </div>
               <Btn onClick={advanceStage} icon="→">次の段階へ</Btn>
@@ -1212,7 +1467,7 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
           <SLabel>全体進捗</SLabel>
           <div style={{ marginBottom:12 }}>
             <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
-              <span style={{ color:C.textMid, fontSize:14 }}>全7段階中</span>
+              <span style={{ color:C.textMid, fontSize:14 }}>{projectStages.length}段階中</span>
               <span style={{ color:C.primary, fontSize:18, fontWeight:800 }}>{project.progress}%</span>
             </div>
             <div style={{ height:14, background:C.bg, borderRadius:7, overflow:"hidden" }}>
@@ -1221,8 +1476,8 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
                 borderRadius:7, transition:"width 0.4s" }} />
             </div>
           </div>
-          {STAGES.map(s => {
-            const done = project.stage > s.id;
+          {projectStages.map(s => {
+            const done = projectStages.findIndex(x=>x.id===project.stage) > projectStages.findIndex(x=>x.id===s.id);
             const current = project.stage === s.id;
             const stageDoneCount = (project.tasks[s.id]||[]).filter(t=>t.done).length;
             const stageTotalCount = (project.tasks[s.id]||[]).length;
@@ -1409,35 +1664,7 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
     </div>}
 
     {/* ── TAB: DOCUMENTS ── */}
-    {tab==="documents" && <div>
-      <div style={{ marginBottom:16, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-        <div style={{ color:C.text, fontSize:16, fontWeight:700 }}>文書管理</div>
-        <Btn onClick={startReport} disabled={reportRunning} icon="📋" variant="secondary">
-          報告書を生成する
-        </Btn>
-      </div>
-      {[
-        { name:"配慮書（生物多様性章）.docx",    size:"2.4 MB", date:"2025-11-12", status:"提出済", done:project.stage>1 },
-        { name:"方法書_生物多様性調査計画.pdf",   size:"5.8 MB", date:"2026-01-08", status:"提出済", done:project.stage>2 },
-        { name:"現地調査データ.xlsx",             size:project.species.length>0?"1.2 MB":"—", date:project.species.length>0?"2026-03-01":"—", status:project.stage>3?"提出済":project.stage===3&&project.species.length>0?"作成中":"未作成", done:project.stage>3 },
-        { name:"準備書_生物多様性章.docx",        size:"—", date:"—", status:project.stage>=4&&reportDone?"完成":project.stage>=4?"生成可能":"未作成", done:false },
-        { name:"TNFD_LEAP整合出力.pdf",           size:"—", date:"—", status:"未作成", done:false },
-      ].map((doc,i) => <div key={i} style={{ display:"flex", alignItems:"center",
-        gap:14, padding:"13px 16px", background:C.bg,
-        borderRadius:10, marginBottom:8,
-        border:`1px solid ${doc.done?C.primary+"33":C.borderLight}` }}>
-        <span style={{ fontSize:22 }}>📄</span>
-        <div style={{ flex:1 }}>
-          <div style={{ color:C.text, fontSize:14, fontWeight:500 }}>{doc.name}</div>
-          <div style={{ color:C.textFaint, fontSize:12, marginTop:2 }}>{doc.size} · {doc.date}</div>
-        </div>
-        <Chip
-          color={doc.status==="提出済"||doc.status==="完成"?C.mid:doc.status==="作成中"||doc.status==="生成可能"?C.amber:C.textMuted}
-          bg={doc.status==="提出済"||doc.status==="完成"?C.light:doc.status==="作成中"||doc.status==="生成可能"?C.amberLight:C.bg}>
-          {doc.status}
-        </Chip>
-      </div>)}
-    </div>}
+    {tab==="documents" && <DocumentsTab project={project} onUpdate={push} />}
 
     {/* ── ADD/EDIT SPECIES MODAL ── */}
     {addingSpecies && <div style={{ position:"fixed", inset:0,
@@ -1533,28 +1760,33 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
 // ─── NEW PROJECT MODAL ────────────────────────────────────────────────────────
 
 // ── OFFLINE STATUS BAR ────────────────────────────────────────────────────────
-function OfflineBar({ isOnline, pendingCount, syncing }) {
-  if (isOnline && pendingCount === 0) return null;
+function OfflineBar({ isOnline, pendingCount, syncing, onManualSync }) {
+  // Only show when offline OR actively syncing OR has pending items
+  if (isOnline && pendingCount === 0 && !syncing) return null;
+  const bg = !isOnline ? "#92400E" : syncing ? C.primary : "#B45309";
   return <div style={{
     position:"fixed", bottom:0, left:0, right:0, zIndex:999,
-    background: isOnline ? C.primary : "#92400E",
-    color:C.white, padding:"10px 24px",
+    background: bg, color:C.white, padding:"9px 20px",
     display:"flex", alignItems:"center", justifyContent:"space-between",
     fontSize:13, fontWeight:600, boxShadow:"0 -2px 12px #0003",
   }}>
     <div style={{ display:"flex", alignItems:"center", gap:10 }}>
       <div style={{ width:8, height:8, borderRadius:"50%",
         background: isOnline ? "#86EFAC" : "#FCA5A5",
-        animation: !isOnline ? "pulse 1.5s infinite" : "none" }}/>
-      {isOnline
-        ? syncing
-          ? `☁️ オンライン — ${pendingCount}件の変更を同期中...`
-          : `✅ オンライン — すべての変更が同期済みです`
-        : `📵 オフライン — ${pendingCount}件の変更をローカル保存中。接続回復後に自動同期します。`
+        animation: syncing||!isOnline ? "pulse 1.5s infinite" : "none" }}/>
+      {syncing
+        ? `☁️ 同期中... (${pendingCount}件)`
+        : !isOnline
+          ? `📵 オフライン — ${pendingCount}件の変更をローカル保存中`
+          : `⏳ 未同期 ${pendingCount}件 — Supabaseへの書き込みを待機中`
       }
     </div>
-    {isOnline && pendingCount > 0 && !syncing && (
-      <span style={{ opacity:0.8, fontSize:12 }}>自動同期待機中...</span>
+    {isOnline && !syncing && pendingCount > 0 && onManualSync && (
+      <button onClick={onManualSync} style={{
+        background:"rgba(255,255,255,0.2)", border:"1px solid rgba(255,255,255,0.4)",
+        color:C.white, borderRadius:6, padding:"4px 12px", cursor:"pointer",
+        fontSize:12, fontWeight:700, fontFamily:"'Noto Sans JP',sans-serif",
+      }}>今すぐ同期</button>
     )}
   </div>;
 }
@@ -2821,34 +3053,82 @@ export default function App() {
       if(local.length > 0) setProjects(local);
     }).catch(()=>{});
 
+    // Flush stale queue on startup if already online
+    if(isConfigured && navigator.onLine){
+      getSyncQueueLength().then(async n => {
+        setPendingSync(n);
+        if(n > 0){ setSyncing(true); await flushSyncQueue(supabase).catch(()=>{}); setSyncing(false); setPendingSync(await getSyncQueueLength().catch(()=>0)); }
+      }).catch(()=>{});
+    }
+
     // Online/offline listeners
     const goOnline = async () => {
       setIsOnline(true);
       if(!isConfigured) return;
-      // Flush any queued changes
       const count = await getSyncQueueLength().catch(()=>0);
       if(count > 0){
         setSyncing(true);
         await flushSyncQueue(supabase).catch(()=>{});
         setSyncing(false);
-        setPendingSync(0);
       }
+      setPendingSync(await getSyncQueueLength().catch(()=>0));
     };
     const goOffline = () => setIsOnline(false);
 
     window.addEventListener("online",  goOnline);
     window.addEventListener("offline", goOffline);
 
-    // Poll pending count every 5s
+    // Poll pending count every 8s — also auto-flush if online
     const poll = setInterval(async ()=>{
       const n = await getSyncQueueLength().catch(()=>0);
       setPendingSync(n);
-    }, 5000);
+      if(n > 0 && navigator.onLine && isConfigured){
+        setSyncing(true);
+        await flushSyncQueue(supabase).catch(()=>{});
+        setSyncing(false);
+        setPendingSync(await getSyncQueueLength().catch(()=>0));
+      }
+    }, 8000);
+
+    // ── Supabase Realtime: receive project changes from other devices ──
+    let realtimeSub = null;
+    if(isConfigured){
+      realtimeSub = supabase
+        .channel("projects-changes")
+        .on("postgres_changes",
+          { event:"*", schema:"public", table:"projects" },
+          (payload) => {
+            if(payload.eventType === "DELETE"){
+              setProjects(prev => prev.filter(p => p.id !== payload.old.id));
+              deleteProjectLocal(payload.old.id).catch(()=>{});
+            } else {
+              const row = payload.new;
+              const mapped = {
+                id: row.id, name: row.name, client: row.client,
+                type: row.type, stage: row.stage, pref: row.pref,
+                deadline: row.deadline, area: row.area, budget: row.budget,
+                desc: row.description, manager: row.manager, risk: row.risk,
+                progress: row.progress, redListCount: row.red_list_count||0,
+                tasks: row.tasks||{}, customStages: row.custom_stages||null,
+                species: row.species_data||[], comments: row.comments||[], documents: row.documents||[],
+              };
+              setProjects(prev => {
+                const exists = prev.find(p => p.id === mapped.id);
+                return exists ? prev.map(p => p.id===mapped.id ? {...p,...mapped} : p)
+                              : [...prev, mapped];
+              });
+              saveProjectLocal(mapped).catch(()=>{});
+            }
+          }
+        )
+        .subscribe();
+    }
 
     return ()=>{
       window.removeEventListener("online",  goOnline);
       window.removeEventListener("offline", goOffline);
       clearInterval(poll);
+      if(realtimeSub) supabase.removeChannel(realtimeSub);
     };
   },[]);
 
@@ -2878,25 +3158,34 @@ export default function App() {
   const updateProject=async (u)=>{
     setProjects(p=>p.map(x=>x.id===u.id?u:x));
     setSelectedProject(u);
-    // Save locally always
     await saveProjectLocal(u).catch(()=>{});
-    // Queue for server sync
-    if(isConfigured){
-      if(isOnline){
-        await supabase.from("projects").upsert({
-          id:u.id, name:u.name, client:u.client, type:u.type,
-          stage:u.stage, pref:u.pref, deadline:u.deadline, area:u.area,
-          budget:u.budget, description:u.desc, manager:u.manager,
-          risk:u.risk, progress:u.progress, red_list_count:u.redListCount,
-          tasks:u.tasks, organization_id:org?.id,
-        }).catch(()=>{});
-      } else {
-        await enqueue("projects","upsert",{
-          id:u.id, name:u.name, client:u.client, type:u.type,
-          stage:u.stage, pref:u.pref, tasks:u.tasks, progress:u.progress,
-        }).catch(()=>{});
+
+    if(!isConfigured) return;
+
+    const payload = {
+      id:u.id, name:u.name, client:u.client, type:u.type,
+      stage:u.stage, pref:u.pref, deadline:u.deadline, area:u.area,
+      budget:u.budget, description:u.desc, manager:u.manager,
+      risk:u.risk, progress:u.progress, red_list_count:u.redListCount||0,
+      tasks:u.tasks||{}, custom_stages:u.customStages||null,
+      species_data:u.species||[], documents:u.documents||[],
+      comments:u.comments||[], organization_id:org?.id,
+    };
+
+    if(navigator.onLine){
+      const { error } = await supabase.from("projects").upsert(payload);
+      if(error){
+        await enqueue("projects","upsert",payload).catch(()=>{});
         setPendingSync(n=>n+1);
+      } else {
+        // Clear any stale queue entry for this project
+        const q = await idbGetAll("syncQueue").catch(()=>[]);
+        for(const e of q){ if(e.payload?.id===u.id) await removeFromQueue(e.qid).catch(()=>{}); }
+        setPendingSync(await getSyncQueueLength().catch(()=>0));
       }
+    } else {
+      await enqueue("projects","upsert",payload).catch(()=>{});
+      setPendingSync(n=>n+1);
     }
   };
 
@@ -2972,6 +3261,12 @@ export default function App() {
       onCancel={()=>setShowNew(false)}/>}
     {showProfile&&<ProfileSettingsModal currentUser={currentUser}
       initialTab={profileTab} onClose={()=>setShowProfile(false)}/>}
-    <OfflineBar isOnline={isOnline} pendingCount={pendingSync} syncing={syncing}/>
+    <OfflineBar isOnline={isOnline} pendingCount={pendingSync} syncing={syncing}
+      onManualSync={async ()=>{
+        setSyncing(true);
+        await flushSyncQueue(supabase).catch(()=>{});
+        setSyncing(false);
+        setPendingSync(await getSyncQueueLength().catch(()=>0));
+      }}/>
   </div>;
 }
