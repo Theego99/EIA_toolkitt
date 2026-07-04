@@ -13,14 +13,61 @@ import 'new_project_screen.dart';
 import 'project_detail_screen.dart';
 import 'team_screen.dart';
 
-class DashboardScreen extends ConsumerWidget {
+class DashboardScreen extends ConsumerStatefulWidget {
   const DashboardScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+enum _Sort { deadline, name, progress, stage }
+
+class _DashboardScreenState extends ConsumerState<DashboardScreen> {
+  String _query = '';
+  int? _stageFilter; // null = 全段階
+  _Sort _sort = _Sort.deadline;
+
+  bool get _isFiltering => _query.trim().isNotEmpty || _stageFilter != null;
+
+  /// 検索・フィルタ・並べ替えを適用した案件リスト
+  List<Project> _visible(List<Project> all) {
+    final q = _query.trim().toLowerCase();
+    var list = all.where((p) {
+      if (_stageFilter != null && p.stage != _stageFilter) return false;
+      if (q.isEmpty) return true;
+      return p.name.toLowerCase().contains(q) ||
+          p.client.toLowerCase().contains(q) ||
+          p.pref.toLowerCase().contains(q) ||
+          projectTypeOf(p.type).label.toLowerCase().contains(q);
+    }).toList();
+
+    int byDeadline(Project a, Project b) {
+      final da = a.deadline, db = b.deadline;
+      if (da == null && db == null) return a.name.compareTo(b.name);
+      if (da == null) return 1; // 期限なしは末尾
+      if (db == null) return -1;
+      return da.compareTo(db);
+    }
+
+    switch (_sort) {
+      case _Sort.deadline:
+        list.sort(byDeadline);
+      case _Sort.name:
+        list.sort((a, b) => a.name.compareTo(b.name));
+      case _Sort.progress:
+        list.sort((a, b) => b.overallProgress.compareTo(a.overallProgress));
+      case _Sort.stage:
+        list.sort((a, b) => a.stage.compareTo(b.stage));
+    }
+    return list;
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final projects = ref.watch(projectsProvider).valueOrNull ?? [];
     final profile = ref.watch(authProvider).profile;
     final role = profile?.role ?? UserRole.viewer;
+    final visible = _visible(projects);
 
     // 法定期限が近い案件の抽出
     final urgent = <(Project, String, int)>[];
@@ -161,12 +208,87 @@ class DashboardScreen extends ConsumerWidget {
                   ],
 
                   const SizedBox(height: 16),
-                  const Text('案件一覧',
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: T.text)),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.baseline,
+                    textBaseline: TextBaseline.alphabetic,
+                    children: [
+                      const Text('案件一覧',
+                          style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              color: T.text)),
+                      const SizedBox(width: 8),
+                      if (projects.isNotEmpty)
+                        Text(
+                          _isFiltering
+                              ? '${visible.length} / ${projects.length}件'
+                              : '${projects.length}件',
+                          style: const TextStyle(
+                              fontSize: 12, color: T.textMuted),
+                        ),
+                    ],
+                  ),
                   const SizedBox(height: 10),
+
+                  // ── 検索・フィルタ・並べ替え ──
+                  if (projects.isNotEmpty) ...[
+                    TextField(
+                      onChanged: (v) => setState(() => _query = v),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        hintText: '案件名・顧客・都道府県・事業種で検索',
+                        prefixIcon: const Icon(Icons.search, size: 20),
+                        suffixIcon: _query.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.close, size: 18),
+                                onPressed: () =>
+                                    setState(() => _query = ''),
+                              ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _FilterDropdown<int?>(
+                            icon: Icons.timeline,
+                            value: _stageFilter,
+                            items: [
+                              const DropdownMenuItem(
+                                  value: null, child: Text('全段階')),
+                              ...kStages.map((s) => DropdownMenuItem(
+                                  value: s.id, child: Text(s.short))),
+                            ],
+                            onChanged: (v) =>
+                                setState(() => _stageFilter = v),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _FilterDropdown<_Sort>(
+                            icon: Icons.sort,
+                            value: _sort,
+                            items: const [
+                              DropdownMenuItem(
+                                  value: _Sort.deadline,
+                                  child: Text('締切が近い順')),
+                              DropdownMenuItem(
+                                  value: _Sort.stage, child: Text('段階順')),
+                              DropdownMenuItem(
+                                  value: _Sort.progress,
+                                  child: Text('進捗が高い順')),
+                              DropdownMenuItem(
+                                  value: _Sort.name, child: Text('名前順')),
+                            ],
+                            onChanged: (v) =>
+                                setState(() => _sort = v ?? _Sort.deadline),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                  ],
 
                   if (projects.isEmpty)
                     Container(
@@ -187,8 +309,29 @@ class DashboardScreen extends ConsumerWidget {
                         ],
                       ),
                     )
+                  else if (visible.isEmpty)
+                    Container(
+                      padding: const EdgeInsets.all(40),
+                      alignment: Alignment.center,
+                      child: Column(
+                        children: [
+                          const Text('🔍', style: TextStyle(fontSize: 36)),
+                          const SizedBox(height: 12),
+                          const Text('条件に一致する案件がありません',
+                              style: TextStyle(color: T.textMuted)),
+                          const SizedBox(height: 8),
+                          TextButton(
+                            onPressed: () => setState(() {
+                              _query = '';
+                              _stageFilter = null;
+                            }),
+                            child: const Text('フィルタをクリア'),
+                          ),
+                        ],
+                      ),
+                    )
                   else
-                    ...projects.map((p) => Padding(
+                    ...visible.map((p) => Padding(
                           padding: const EdgeInsets.only(bottom: 10),
                           child: ProjectCard(
                             project: p,
@@ -286,6 +429,48 @@ class _StatCard extends StatelessWidget {
                       const TextStyle(fontSize: 11, color: T.textMuted)),
             ],
           ),
+        ),
+      );
+}
+
+/// コンパクトなフィルタ・並べ替えドロップダウン
+class _FilterDropdown<V> extends StatelessWidget {
+  final IconData icon;
+  final V value;
+  final List<DropdownMenuItem<V>> items;
+  final ValueChanged<V?> onChanged;
+  const _FilterDropdown({
+    required this.icon,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: T.surface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: T.border),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: T.textMuted),
+            const SizedBox(width: 6),
+            Expanded(
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<V>(
+                  value: value,
+                  isExpanded: true,
+                  isDense: true,
+                  style: const TextStyle(fontSize: 13, color: T.text),
+                  items: items,
+                  onChanged: onChanged,
+                ),
+              ),
+            ),
+          ],
         ),
       );
 }

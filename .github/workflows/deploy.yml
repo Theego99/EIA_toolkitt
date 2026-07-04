@@ -39,7 +39,9 @@ jobs:
       - name: Build web (PWA)
         # base-href must match the repo name so asset paths resolve on
         # https://<user>.github.io/EIA_toolkitt/
-        run: flutter build web --release --base-href /EIA_toolkitt/
+        # --no-web-resources-cdn bundles CanvasKit locally so the PWA works
+        # fully offline (service worker caches it) instead of hitting gstatic.
+        run: flutter build web --release --no-web-resources-cdn --base-href /EIA_toolkitt/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
