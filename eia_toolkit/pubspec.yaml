@@ -1,0 +1,40 @@
+name: eia_toolkit
+description: 環境影響評価業務支援ツールキット — Japanese EIA workflow management for consulting firms
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.2.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # Backend
+  supabase_flutter: ^2.8.0
+
+  # State management
+  flutter_riverpod: ^2.5.1
+
+  # Offline storage
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  # Connectivity detection
+  connectivity_plus: ^6.0.5
+
+  # Utilities
+  uuid: ^4.5.1
+  intl: ^0.20.2
+  file_picker: ^8.1.2
+  url_launcher: ^6.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
