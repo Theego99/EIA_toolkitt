@@ -21,32 +21,32 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: eia_toolkit
+        working-directory: webapp
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          flutter-version: 3.44.2
-          channel: stable
-          cache: true
+          node-version: 20
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
 
       - name: Install dependencies
-        run: flutter pub get
+        run: npm ci
 
-      - name: Build web (PWA)
-        # base-href must match the repo name so asset paths resolve on
+      - name: Build (Vite PWA)
+        # VITE_BASE must match the repo name so asset paths resolve on
         # https://<user>.github.io/EIA_toolkitt/
-        # --no-web-resources-cdn bundles CanvasKit locally so the PWA works
-        # fully offline (service worker caches it) instead of hitting gstatic.
-        run: flutter build web --release --no-web-resources-cdn --base-href /EIA_toolkitt/
+        env:
+          VITE_BASE: /EIA_toolkitt/
+        run: npm run build
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: eia_toolkit/build/web
+          path: webapp/dist
 
   deploy:
     needs: build

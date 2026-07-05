@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "webapp",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "webapp", "run", "dev", "--", "--port", "5174", "--strictPort"],
+      "port": 5174
+    },
+    {
+      "name": "web-pwa",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8087", "--directory", "eia_toolkit/build/web"],
+      "port": 8087
+    }
+  ]
+}
