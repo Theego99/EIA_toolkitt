@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { supabase, isConfigured } from "./lib/supabase.js";
 import * as EIA from "./lib/eiaLaw.js";
+import { lookupSpecies, suggestSpecies, RED_LIST_NAMES } from "./lib/redList.js";
 
 // ── OFFLINE STORE (IndexedDB) ─────────────────────────────────────────────────
 const DB_NAME = "eia-toolkit", DB_VERSION = 2;
@@ -1171,9 +1172,6 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
   const [comment, setComment] = useState("");
   const [mentionQuery, setMentionQuery] = useState(null); // null | string
   const [mentionAnchor, setMentionAnchor] = useState(0); // index of "@" in comment
-  const [reportDone, setReportDone] = useState(false);
-  const [reportProg, setReportProg] = useState(0);
-  const [reportRunning, setReportRunning] = useState(false);
   const [editingTasks, setEditingTasks] = useState(false);
   const [openNote, setOpenNote] = useState(null); // 記録欄を開いているタスクID
   const projectStages = project.customStages || STAGES;
@@ -1311,11 +1309,49 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
     });
   };
 
-  const startReport = () => {
-    setReportRunning(true); setReportProg(0); setReportDone(false);
-    const iv = setInterval(()=>setReportProg(p=>{
-      if(p>=100){ clearInterval(iv); setReportRunning(false); setReportDone(true); return 100; }
-      return p+3; }), 70);
+  // 法定図書の実生成（方法書/準備書）— 印刷(PDF保存) と Word ダウンロード
+  const docKindForStage = project.stage >= 4 ? "junbi" : "hoho";
+  const printLegalDoc = (kind) => {
+    const html = EIA.buildDocument(kind, project);
+    const f = document.createElement("iframe");
+    f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+    document.body.appendChild(f);
+    const d = f.contentWindow.document;
+    d.open(); d.write(html); d.close();
+    let printed = false;
+    const doPrint = () => { if(printed) return; printed = true;
+      try{ f.contentWindow.focus(); f.contentWindow.print(); }catch(e){/*noop*/}
+      setTimeout(()=>{ try{ document.body.removeChild(f); }catch(e){/*noop*/} }, 3000); };
+    f.onload = () => setTimeout(doPrint, 250);
+    setTimeout(doPrint, 900);
+    push(logActivity(project, `法定図書を生成（${kind==="junbi"?"準備書":"方法書"}・印刷）`));
+  };
+  const downloadLegalDoc = (kind) => {
+    const html = EIA.buildDocument(kind, project);
+    const label = kind==="junbi" ? "準備書" : "方法書";
+    const blob = new Blob(["﻿", html], { type:"application/msword" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${label}_${(project.name||"案件").replace(/[\\/:*?"<>|]/g,"_")}.doc`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
+    push(logActivity(project, `法定図書を生成（${label}・Word）`));
+  };
+  // 種リストCSV（Excel互換・BOM付きUTF-8）
+  const downloadSpeciesCSV = () => {
+    const head = ["和名","学名","分類","レッドリスト","保護指定","個体数","確認地点","確認日","記録者","備考"];
+    const rows = project.species.map(s => [s.name, s.latin, s.type, s.status,
+      s.protected?"あり":"", s.count, s.location, s.date, s.recordedBy||"", s.notes||""]);
+    const csv = [head, ...rows].map(r => r.map(v =>
+      `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
+    const blob = new Blob(["﻿", csv], { type:"text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `種リスト_${(project.name||"案件").replace(/[\\/:*?"<>|]/g,"_")}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
   };
 
   const TABS = [
@@ -1547,51 +1583,29 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
           </Card>
         )}
 
-        {/* Stage 4/5/6: report generation */}
-        {(project.stage===4||project.stage===5||project.stage===6) && (
-          <Card style={{ marginBottom:20 }}>
-            <SLabel>報告書生成</SLabel>
-            <div style={{ color:C.textMid, fontSize:13, marginBottom:16, lineHeight:1.6 }}>
-              現在の確認種データ（{project.species.length}種）をもとに、
-              環境省・{project.pref}版書式に準拠した報告書を自動生成できます。
-            </div>
-            {!reportDone && <Btn onClick={startReport} disabled={reportRunning} icon="📋">
-              {reportRunning ? "生成中..." : "報告書を今すぐ生成する"}
-            </Btn>}
-            {reportRunning && <div style={{ marginTop:14 }}>
-              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
-                <span style={{ color:C.textMuted, fontSize:13 }}>
-                  {reportProg<30?"フィールドデータを読み込み中...":reportProg<60?"レッドリスト照合中...":reportProg<85?"書式を適用中...":"最終確認中..."}
-                </span>
-                <span style={{ color:C.primary, fontFamily:"'DM Mono',monospace",
-                  fontSize:13, fontWeight:700 }}>{reportProg}%</span>
-              </div>
-              <div style={{ height:12, background:C.bg, borderRadius:6, overflow:"hidden" }}>
-                <div style={{ height:"100%", width:`${reportProg}%`,
-                  background:`linear-gradient(90deg,${C.primary},${C.mid})`,
-                  borderRadius:6, transition:"width 0.1s" }} />
-              </div>
-            </div>}
-            {reportDone && <div style={{ marginTop:14, padding:"16px 18px",
-              background:C.light, border:`1px solid ${C.primary}44`, borderRadius:10 }}>
-              <div style={{ color:C.primary, fontWeight:700, fontSize:14, marginBottom:10 }}>
-                ✅ 報告書が生成されました
-              </div>
-              <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-                {[`${project.stage===6?"評価書":"準備書"}_生物多様性章.docx`,
-                  `${project.stage===6?"評価書":"準備書"}_生物多様性章.pdf`,
-                  `種リスト_${project.pref}版.xlsx`].map(f => (
-                  <div key={f} style={{ background:C.surface, border:`1px solid ${C.border}`,
-                    borderRadius:8, padding:"10px 14px", display:"flex",
-                    alignItems:"center", gap:7, cursor:"pointer", boxShadow:C.shadow }}>
-                    <span style={{ fontSize:18 }}>📄</span>
-                    <span style={{ color:C.text, fontSize:12, fontWeight:500 }}>{f}</span>
-                  </div>
-                ))}
-              </div>
-            </div>}
-          </Card>
-        )}
+        {/* 法定図書の生成（実データを差し込んだ草案を即時出力） */}
+        <Card style={{ marginBottom:20 }}>
+          <SLabel>法定図書の生成</SLabel>
+          <div style={{ color:C.textMid, fontSize:13, marginBottom:14, lineHeight:1.6 }}>
+            この案件のデータ（確認種 {project.species.length}種・作業記録・事業概要）を
+            主務省令の章建てに自動差込した{docKindForStage==="junbi"?"準備書":"方法書"}草案を生成します。
+          </div>
+          <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+            <Btn onClick={()=>printLegalDoc(docKindForStage)} icon="🖨️">
+              {docKindForStage==="junbi"?"準備書":"方法書"}を印刷 / PDF保存
+            </Btn>
+            <Btn variant="secondary" onClick={()=>downloadLegalDoc(docKindForStage)} icon="⬇️">
+              Word (.doc) をダウンロード
+            </Btn>
+            {docKindForStage==="junbi" &&
+              <Btn variant="ghost" onClick={()=>downloadLegalDoc("hoho")}>方法書も出力</Btn>}
+            {project.species.length > 0 &&
+              <Btn variant="ghost" onClick={downloadSpeciesCSV} icon="📊">種リストCSV</Btn>}
+          </div>
+          <div style={{ marginTop:12, fontSize:12, color:C.textMuted }}>
+            印刷ダイアログで「PDFに保存」を選ぶとPDF化できます。より詳細な設定は「報告書」ページへ。
+          </div>
+        </Card>
 
         {/* Comments */}
         <Card>
@@ -2016,11 +2030,30 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
           {editSpIdx!==null ? "確認種を編集" : "確認種を新規追加"}
         </h2>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
+          <datalist id="rl-species">{RED_LIST_NAMES.map(n=><option key={n} value={n} />)}</datalist>
+          {/* 種名：和名を入れると環境省レッドリストから学名・分類・カテゴリを自動補完 */}
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>
+              種名（和名）*
+              {newSp._rl && <span style={{ marginLeft:8, fontSize:12, color:C.primary, fontWeight:700 }}>
+                ✓ レッドリストから自動補完
+              </span>}
+            </label>
+            <input type="text" list="rl-species" value={newSp.name}
+              placeholder="例）イヌワシ（入力すると自動補完されます）"
+              onChange={e=>{
+                const name = e.target.value;
+                const hit = lookupSpecies(name);
+                setNewSp(p => hit
+                  ? { ...p, name, latin:hit.latin, type:hit.type, status:hit.status, protected:hit.protected, _rl:true }
+                  : { ...p, name, _rl:false });
+              }}
+              style={{ ...INP, fontSize:14 }} />
+          </div>
           {[
-            { l:"種名（和名）*", k:"name", span:true },
-            { l:"学名",          k:"latin" },
-            { l:"個体数",        k:"count", t:"number" },
-          ].map(f => <div key={f.k} style={{ gridColumn:f.span?"1/-1":"auto" }}>
+            { l:"学名",   k:"latin" },
+            { l:"個体数", k:"count", t:"number" },
+          ].map(f => <div key={f.k}>
             <label style={{ display:"block", color:C.textMid, fontSize:14,
               fontWeight:700, marginBottom:7 }}>{f.l}</label>
             <input type={f.t||"text"} value={newSp[f.k]}
