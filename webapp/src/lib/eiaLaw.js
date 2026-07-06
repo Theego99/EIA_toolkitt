@@ -481,9 +481,61 @@ export function buildDocument(kind, project) {
   const grouped = itemsByCategory(itemKeys)
   const today = new Date().toLocaleDateString('ja-JP')
   const species = project?.species || []
+  const tasks = project?.tasks || {}
+
+  const stageShort = (id) =>
+    PROCEDURE_STAGES.find((s) => String(s.id) === String(id))?.short || `段階${id}`
+
+  // 事業概要テーブル（案件データから自動差込）
+  const metaTable = () => {
+    const rows = [
+      ['事業者', project?.client],
+      ['対象事業', typeLabel],
+      ['実施区域', project?.pref],
+      ['事業規模', project?.area],
+      ['事業費', project?.budget],
+      ['担当責任者', project?.manager],
+    ].filter((r) => r[1])
+    const meta = rows.length
+      ? `<table class="tbl"><tbody>${rows
+          .map((r) => `<tr><th style="width:140px">${esc(r[0])}</th><td>${esc(r[1])}</td></tr>`)
+          .join('')}</tbody></table>`
+      : ''
+    const desc = project?.desc ? `<h3>事業の概要</h3><p>${esc(project.desc)}</p>` : ''
+    return meta + desc
+  }
+
+  // タスクの記録メモ（現地の実測データ・所見）を表に差し込む
+  const taskRecords = (stageIds) => {
+    const rows = []
+    for (const sid of stageIds) {
+      for (const t of tasks[sid] || []) {
+        if (t.note || t.done) rows.push({ sid, ...t })
+      }
+    }
+    if (!rows.length) return ''
+    return (
+      `<table class="tbl"><thead><tr><th style="width:88px">段階</th><th>作業項目</th><th style="width:60px">状態</th><th>記録・実測データ・所見</th></tr></thead><tbody>` +
+      rows
+        .map(
+          (r) =>
+            `<tr><td>${esc(stageShort(r.sid))}</td><td>${esc(r.label)}</td><td>${
+              r.done ? '完了' : '—'
+            }</td><td>${esc(r.note || '')}${
+              r.noteAt ? `<div class="muted small">記録日:${esc(r.noteAt)}</div>` : ''
+            }</td></tr>`
+        )
+        .join('') +
+      `</tbody></table>`
+    )
+  }
 
   // 章ごとに、該当データがあれば差し込む
   const chapterBody = (ch) => {
+    // 第2章：対象事業の目的及び内容 — 案件データを差込
+    if (ch.n === 2) {
+      return metaTable() + ch.sub.map((s) => `<h3>${esc(s)}</h3><p class="ph">［記載欄］</p>`).join('')
+    }
     // 方法書 第4章：項目選定マトリクス
     if (kind === 'hoho' && ch.n === 4) {
       return (
@@ -524,7 +576,7 @@ export function buildDocument(kind, project) {
       const rl = species.filter((s) => ['CR', 'EN', 'VU', 'NT'].includes(s.status))
       const list = species.length
         ? `<p>確認種数：<b>${species.length}</b>種（うち重要種 <b>${rl.length}</b>種）</p>` +
-          `<table class="tbl"><thead><tr><th>和名</th><th>学名</th><th>分類</th><th>カテゴリ</th><th>確認地点</th></tr></thead><tbody>` +
+          `<table class="tbl"><thead><tr><th>和名</th><th>学名</th><th>分類</th><th>カテゴリ</th><th>確認地点</th><th>記録者</th></tr></thead><tbody>` +
           species
             .map(
               (s) =>
@@ -534,14 +586,24 @@ export function buildDocument(kind, project) {
                   ['CR', 'EN', 'VU', 'NT'].includes(s.status)
                     ? `<b style="color:#b91c1c">${esc(s.status)}</b>`
                     : esc(s.status || '')
-                }</td><td>${esc(s.location || '')}</td></tr>`
+                }</td><td>${esc(s.location || '')}</td><td>${esc(s.recordedBy || '')}</td></tr>`
             )
             .join('') +
           `</tbody></table>`
         : '<p class="muted">確認種データが未登録です。案件の「種記録」から入力してください。</p>'
+      const recs = taskRecords([3, 4])
       return (
         list +
+        (recs ? `<h3>現地調査・予測の作業記録</h3>${recs}` : '') +
         ch.sub.map((s) => `<h3>${esc(s)}</h3><p class="ph">［記載欄］</p>`).join('')
+      )
+    }
+    // 巻末：全段階の作業記録一覧
+    if (ch.n === '巻末') {
+      const all = taskRecords([1, 2, 3, 4, 5, 6])
+      return (
+        (all ? `<h3>作業記録一覧（全段階）</h3>${all}` : '') +
+        '<p class="ph">［生データ・図面・気象統計・確認動植物全リスト等を添付］</p>'
       )
     }
     // それ以外：小見出し + 記載欄
