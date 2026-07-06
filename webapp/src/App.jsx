@@ -58,34 +58,50 @@ async function getSyncQueueLength() {
   });
 }
 async function removeFromQueue(qid) { await idbTx("syncQueue","readwrite", s=>s.delete(qid)); }
+async function bumpRetry(entry, retries) {
+  await idbTx("syncQueue","readwrite", s=>s.put({ ...entry, retries: retries ?? (entry.retries||0)+1 }));
+}
+const MAX_SYNC_RETRIES = 8;
 async function flushSyncQueue(sb) {
-  if (!sb || !navigator.onLine) return { synced:0, failed:0 };
+  if (!sb || !navigator.onLine) return { synced:0, failed:0, error:null };
   const queue = await idbGetAll("syncQueue");
-  let synced=0, failed=0;
+  let synced=0, failed=0, lastError=null;
   for (const entry of queue) {
+    const pid = String(entry.payload?.id ?? "");
+    // Purge demo/legacy junk: numeric or timestamp IDs never belong in a real DB
+    if (entry.table==="projects" && entry.op==="upsert" && /^\d+$/.test(pid)) {
+      await removeFromQueue(entry.qid); continue;
+    }
     try {
       if (entry.table==="projects") {
         if (entry.op==="upsert") {
-          // Ensure org_id present — if missing, skip (will retry when org loads)
           if(!entry.payload?.organization_id) {
-            console.warn("[Sync] Skipping entry — no organization_id yet:", entry.qid);
-            failed++; continue;
+            // Can't satisfy RLS without an org — give up after a few tries
+            if((entry.retries||0) >= MAX_SYNC_RETRIES){ await removeFromQueue(entry.qid); }
+            else { await bumpRetry(entry); lastError="organization_id 未設定"; failed++; }
+            continue;
           }
           const payload = sanitizeProjectPayload(entry.payload);
-          const {data, error}=await sb.from("projects").upsert(payload).select("id").single();
+          const {error}=await sb.from("projects").upsert(payload).select("id").single();
           if(error) throw new Error(`${error.code}: ${error.message}`);
         } else if (entry.op==="delete") {
-          const {error}=await sb.from("projects").delete().eq("id",String(entry.payload.id));
+          const {error}=await sb.from("projects").delete().eq("id",pid);
           if(error) throw new Error(`${error.code}: ${error.message}`);
         }
       }
       await removeFromQueue(entry.qid); synced++;
     } catch(e) {
+      lastError = e.message;
       console.error("[Sync] FAILED entry", entry.qid, e.message);
+      // Stop poisoning the queue: drop after too many failed attempts so the
+      // banner clears and new edits can sync (the local copy is still saved).
+      const retries = (entry.retries||0)+1;
+      if(retries >= MAX_SYNC_RETRIES) await removeFromQueue(entry.qid);
+      else await bumpRetry(entry, retries);
       failed++;
     }
   }
-  return { synced, failed };
+  return { synced, failed, error:lastError };
 }
 
 // Strip any keys not in the DB schema, ensure id is a valid UUID string
@@ -1147,6 +1163,7 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
   const [reportProg, setReportProg] = useState(0);
   const [reportRunning, setReportRunning] = useState(false);
   const [editingTasks, setEditingTasks] = useState(false);
+  const [openNote, setOpenNote] = useState(null); // 記録欄を開いているタスクID
   const projectStages = project.customStages || STAGES;
   const curStageIdx = projectStages.findIndex(s=>s.id===project.stage);
   const cur = projectStages[curStageIdx];
@@ -1166,6 +1183,17 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
       (s.id===project.stage && allNowDone)).length;
     const newProgress = Math.round((stagesCompleted / projectStages.length) * 100);
     push({ ...project, tasks:newTasks, progress:newProgress });
+  };
+
+  // タスクごとの記録（調査結果・数値・担当者メモ等）を保存。
+  // tasks は JSONB 列なので、そのまま案件保存で永続化される。
+  const setTaskNote = (taskId, note) => {
+    const cur = (project.tasks[project.stage]||[]).find(t=>t.id===taskId);
+    if((cur?.note||"") === note) return; // 変更なしなら書き込まない
+    const newTasks = { ...project.tasks,
+      [project.stage]: (project.tasks[project.stage]||[]).map(t =>
+        t.id===taskId ? {...t, note, noteAt:new Date().toLocaleDateString("ja-JP")} : t) };
+    push({ ...project, tasks:newTasks });
   };
 
   const advanceStage = () => {
@@ -1399,18 +1427,35 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
             </Btn>
           </div>
           {stageTasks.map(task => <div key={task.id}
-            style={{ display:"flex", alignItems:"center", gap:14,
-              padding:"13px 0", borderBottom:`1px solid ${C.borderLight}`,
-              cursor:"pointer" }} onClick={()=>toggleTask(task.id)}>
-            <div style={{ width:24, height:24, borderRadius:6, flexShrink:0,
-              background:task.done?C.primary:C.surface,
-              border:`2px solid ${task.done?C.primary:C.border}`,
-              display:"flex", alignItems:"center", justifyContent:"center",
-              color:C.white, fontSize:14, transition:"all 0.15s" }}>
-              {task.done?"✓":""}
+            style={{ padding:"11px 0", borderBottom:`1px solid ${C.borderLight}` }}>
+            <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+              <div onClick={()=>toggleTask(task.id)} style={{ width:24, height:24, borderRadius:6, flexShrink:0,
+                background:task.done?C.primary:C.surface, cursor:"pointer",
+                border:`2px solid ${task.done?C.primary:C.border}`,
+                display:"flex", alignItems:"center", justifyContent:"center",
+                color:C.white, fontSize:14, transition:"all 0.15s" }}>
+                {task.done?"✓":""}
+              </div>
+              <span onClick={()=>toggleTask(task.id)} style={{ flex:1, cursor:"pointer",
+                color:task.done?C.textMuted:C.text, fontSize:14,
+                textDecoration:task.done?"line-through":"none" }}>{task.label}</span>
+              <button onClick={()=>setOpenNote(openNote===task.id?null:task.id)}
+                style={{ background:"none", border:"none", cursor:"pointer", flexShrink:0,
+                  color:task.note?C.primary:C.textFaint, fontSize:12, fontWeight:task.note?700:400,
+                  padding:"4px 8px", borderRadius:6 }}>
+                {task.note ? "📝 記録あり" : "＋ 記録"}
+              </button>
             </div>
-            <span style={{ color:task.done?C.textMuted:C.text, fontSize:14,
-              textDecoration:task.done?"line-through":"none" }}>{task.label}</span>
+            {openNote===task.id && <div style={{ margin:"8px 0 2px 38px" }}>
+              <textarea defaultValue={task.note||""}
+                placeholder="調査結果・実測値・使用機材・担当者・所見など（自動保存されます）"
+                onBlur={e=>setTaskNote(task.id, e.target.value)}
+                style={{ ...INP, width:"100%", minHeight:72, fontSize:13,
+                  fontFamily:"inherit", lineHeight:1.6, resize:"vertical", boxSizing:"border-box" }}/>
+              {task.noteAt && <div style={{ fontSize:11, color:C.textFaint, marginTop:3 }}>
+                最終更新：{task.noteAt}
+              </div>}
+            </div>}
           </div>)}
           {allDone && curStageIdx < projectStages.length - 1 && (
             <div style={{ marginTop:16, padding:"14px 16px",
@@ -3379,7 +3424,9 @@ export default function App() {
   const [currentUser,setCurrentUser]=useState(null); // { id, name, email, role }
   const [active,setActive]=useState("dashboard");
   const [selectedProject,setSelectedProject]=useState(null);
-  const [projects,setProjects]=useState(INIT_PROJECTS);
+  // Real accounts start empty and load from Supabase; only the unconfigured
+  // demo shows sample projects (which must never be synced to a real DB).
+  const [projects,setProjects]=useState(isConfigured ? [] : INIT_PROJECTS);
   const [showNew,setShowNew]=useState(false);
   const [showProfile,setShowProfile]=useState(false);
   const [profileTab,setProfileTab]=useState("profile");
@@ -3527,11 +3574,18 @@ export default function App() {
         const { data:{ session } } = await supabase.auth.getSession().catch(()=>({ data:{} }));
         if(!session) return; // not logged in yet, skip
         setSyncing(true);
-        const result = await flushSyncQueue(supabase).catch(()=>({ synced:0, failed:0 }));
+        const result = await flushSyncQueue(supabase).catch(()=>({ synced:0, failed:0, error:null }));
         setSyncing(false);
         const remaining = await getSyncQueueLength().catch(()=>0);
         setPendingSync(remaining);
-      }
+        // Surface a diagnostic error, or clear it once everything drained
+        if(remaining === 0){ setSyncError(null); }
+        else if(result.error){
+          setSyncError(/42501|row-level security/.test(result.error)
+            ? "権限エラー：アカウントの役割が管理者(admin)/PMでない可能性があります（プロフィールを確認してください）。"
+            : result.error);
+        }
+      } else if(n === 0){ setSyncError(null); }
     }, 10000);
 
     // ── 6. Realtime subscription ─────────────────────────────────────────────
@@ -3760,7 +3814,15 @@ export default function App() {
         setSyncing(true); setSyncError(null);
         try {
           const result = await flushSyncQueue(supabase);
-          if(result.failed > 0) setSyncError(`${result.failed}件の同期に失敗しました。コンソールを確認してください。`);
+          const remaining = await getSyncQueueLength().catch(()=>0);
+          if(remaining > 0 && result.error){
+            const hint = /42501|row-level security/.test(result.error)
+              ? "権限エラー：あなたのアカウントの役割が管理者(admin)またはPMでない可能性があります。"
+              : result.error;
+            setSyncError(`${remaining}件が同期できません — ${hint}`);
+          } else {
+            setSyncError(null);
+          }
         } catch(e) { setSyncError(e.message); }
         setSyncing(false);
         setPendingSync(await getSyncQueueLength().catch(()=>0));

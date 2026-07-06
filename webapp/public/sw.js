@@ -4,9 +4,9 @@
 //   - Supabase API calls: Network-first with cache fallback
 //   - Report generation (Lambda): Network-only (can't work offline)
 
-const CACHE_NAME = 'eia-toolkit-v1';
-const STATIC_CACHE = 'eia-static-v1';
-const DATA_CACHE = 'eia-data-v1';
+const CACHE_NAME = 'eia-toolkit-v2';
+const STATIC_CACHE = 'eia-static-v2';
+const DATA_CACHE = 'eia-data-v2';
 
 // Base path the SW is served from (e.g. "/" locally, "/EIA_toolkitt/" on
 // GitHub Pages). Derived from the SW's own location so it works on any subpath.
@@ -61,7 +61,16 @@ self.addEventListener('fetch', (event) => {
     return; // let browser handle normally
   }
 
-  // Static assets — cache first
+  // Navigations / HTML — network FIRST so users always get the latest app
+  // when online (only falls back to the cached shell when truly offline).
+  // This prevents the PWA from getting stuck on a stale cached build.
+  if (event.request.mode === 'navigate' ||
+      (event.request.destination === 'document')) {
+    event.respondWith(networkFirstWithCache(event.request, STATIC_CACHE));
+    return;
+  }
+
+  // Hashed static assets (immutable filenames) — cache first is safe & fast
   event.respondWith(cacheFirstWithNetwork(event.request));
 });
 
