@@ -2829,31 +2829,38 @@ function ScopingModule() {
 
 // ─── REPORT MODULE ────────────────────────────────────────────────────────────
 function ReportModule({ projects=[] }) {
-  const [projectId,setProjectId]=useState(projects[0]?.id || "");
+  const [projectId,setProjectId]=useState("");
   const [kind,setKind]=useState("hoho"); // hoho | junbi
-  const project = projects.find(p=>String(p.id)===String(projectId));
   const kindLabel = kind==="junbi" ? "準備書" : "方法書";
+  // 案件は非同期で読み込まれるため、未選択/不一致なら先頭案件にフォールバック
+  const selectedId = (projectId && projects.some(p=>String(p.id)===String(projectId)))
+    ? projectId : (projects[0]?.id ?? "");
+  const project = projects.find(p=>String(p.id)===String(selectedId));
+  const html = project ? EIA.buildDocument(kind, project) : "";
 
-  function generate(){
-    if(!project) return;
-    return EIA.buildDocument(kind, project);
-  }
-  function openPrint(){
-    const html = generate(); if(!html) return;
-    const w = window.open("", "_blank");
-    if(!w){ alert("ポップアップがブロックされました。ブラウザの設定で許可してください。"); return; }
-    w.document.write(html); w.document.close();
-    setTimeout(()=>w.print(), 400); // 印刷ダイアログ→PDF保存が可能
+  function printDoc(){
+    if(!html) return;
+    const f = document.createElement("iframe");
+    f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+    document.body.appendChild(f);
+    const d = f.contentWindow.document;
+    d.open(); d.write(html); d.close();
+    let printed = false;
+    const doPrint = ()=>{ if(printed) return; printed=true;
+      try{ f.contentWindow.focus(); f.contentWindow.print(); }catch(e){}
+      setTimeout(()=>{ try{ document.body.removeChild(f); }catch(e){} }, 3000); };
+    f.onload = ()=> setTimeout(doPrint, 250);
+    setTimeout(doPrint, 900); // フォールバック（onload未発火時）
   }
   function downloadDoc(){
-    const html = generate(); if(!html) return;
+    if(!html) return;
     const blob = new Blob(["﻿", html], { type:"application/msword" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `${kindLabel}_${(project?.name||"案件").replace(/[\\/:*?"<>|]/g,"_")}.doc`;
-    a.click();
-    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
   }
 
   const speciesCount = project?.species?.length || 0;
@@ -2863,7 +2870,7 @@ function ReportModule({ projects=[] }) {
     <h1 style={{ color:C.text, fontFamily:"'Noto Serif JP',serif",
       fontSize:28, fontWeight:700, margin:"0 0 6px" }}>法定図書の生成</h1>
     <p style={{ color:C.textMuted, fontSize:14, marginBottom:28 }}>
-      案件データから、主務省令の章建て構成に沿った方法書・準備書の草案をワンクリックで生成します（PDF印刷・Word保存対応）
+      案件データから、主務省令の章建て構成に沿った方法書・準備書の草案を生成します（下に実物プレビュー・PDF印刷・Word保存対応）
     </p>
 
     <div style={{ display:"grid", gridTemplateColumns:"340px 1fr", gap:24 }}>
@@ -2871,7 +2878,7 @@ function ReportModule({ projects=[] }) {
         <SLabel>出力設定</SLabel>
         <div style={{ marginBottom:16 }}>
           <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>対象案件</label>
-          <select value={projectId} onChange={e=>setProjectId(e.target.value)} style={{ ...INP, fontSize:14, width:"100%" }}>
+          <select value={selectedId} onChange={e=>setProjectId(e.target.value)} style={{ ...INP, fontSize:14, width:"100%" }}>
             {projects.length===0 && <option value="">案件がありません</option>}
             {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
@@ -2887,45 +2894,35 @@ function ReportModule({ projects=[] }) {
             ))}
           </div>
         </div>
-        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-          <Btn fullWidth size="lg" icon="📄" onClick={openPrint} disabled={!project}>PDFで印刷 / 保存</Btn>
-          <Btn fullWidth size="lg" variant="secondary" icon="⬇️" onClick={downloadDoc} disabled={!project}>Word (.doc) をダウンロード</Btn>
-        </div>
-        <div style={{ marginTop:16, fontSize:12, color:C.textMuted, lineHeight:1.7 }}>
-          「PDFで印刷」→ 印刷ダイアログで「PDFに保存」を選択できます。
-        </div>
-      </Card>
-
-      {project ? <div>
-        <Card style={{ marginBottom:14 }}>
-          <SLabel>生成内容プレビュー</SLabel>
-          <div style={{ color:C.text, fontSize:16, fontWeight:700, marginBottom:4,
-            fontFamily:"'Noto Serif JP',serif" }}>{kindLabel} — {project.name}</div>
-          <div style={{ color:C.textMuted, fontSize:13, marginBottom:12 }}>
-            事業者：{project.client||"—"} ／ 実施区域：{project.pref||"—"}
-          </div>
-          <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+        {project ? <>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:14 }}>
             <Chip color={C.primary} bg={C.light}>確認種 {speciesCount}件</Chip>
             <Chip color={C.red} bg={C.redLight}>重要種 {rlCount}件</Chip>
-            <Chip color={C.textMuted} bg={C.bg}>主務省令 章建て準拠</Chip>
           </div>
-        </Card>
-        <Card>
-          <SLabel>含まれる章（{kindLabel}）</SLabel>
-          <ol style={{ margin:"6px 0 0", paddingLeft:20, color:C.textMid, fontSize:14, lineHeight:2 }}>
-            {(kind==="junbi"?EIA.JUNBISHO_TEMPLATE:EIA.HOHOSHO_TEMPLATE).chapters.map((ch,i)=>(
-              <li key={i} style={{ listStyle:ch.n==="巻末"?"none":"decimal" }}>
-                {ch.title}
-                {((kind==="hoho"&&(ch.n===4||ch.n===5))||(kind==="junbi"&&ch.n===4)) &&
-                  <Chip color={C.mid} bg={C.light} size={11}>案件データを自動差込</Chip>}
-              </li>
-            ))}
-          </ol>
-        </Card>
-      </div> : <div style={{ background:C.surface, border:`2px dashed ${C.border}`,
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            <Btn fullWidth size="lg" icon="🖨️" onClick={printDoc}>印刷 / PDFで保存</Btn>
+            <Btn fullWidth size="lg" variant="secondary" icon="⬇️" onClick={downloadDoc}>Word (.doc) をダウンロード</Btn>
+          </div>
+          <div style={{ marginTop:16, fontSize:12, color:C.textMuted, lineHeight:1.7 }}>
+            「印刷」→ 印刷ダイアログで「PDFに保存」を選ぶとPDF化できます。
+          </div>
+        </> : <div style={{ fontSize:13, color:C.textMuted, lineHeight:1.8 }}>
+          案件がありません。まず案件を作成してください。
+        </div>}
+      </Card>
+
+      {project ? <Card style={{ padding:0, overflow:"hidden" }}>
+        <div style={{ padding:"12px 16px", borderBottom:`1px solid ${C.border}`,
+          display:"flex", justifyContent:"space-between", alignItems:"center", background:C.bg }}>
+          <span style={{ fontWeight:700, color:C.text, fontSize:14 }}>実物プレビュー — {kindLabel}</span>
+          <span style={{ fontSize:12, color:C.textMuted }}>{project.name}</span>
+        </div>
+        <iframe title="report-preview" srcDoc={html}
+          style={{ width:"100%", height:640, border:"none", background:"#fff" }}/>
+      </Card> : <div style={{ background:C.surface, border:`2px dashed ${C.border}`,
         borderRadius:14, padding:64, textAlign:"center" }}>
         <div style={{ fontSize:48, marginBottom:14 }}>📄</div>
-        <div style={{ color:C.textMuted, fontSize:15 }}>案件を選択してください</div>
+        <div style={{ color:C.textMuted, fontSize:15 }}>案件を作成すると、ここに図書のプレビューが表示されます</div>
       </div>}
     </div>
   </div>;
