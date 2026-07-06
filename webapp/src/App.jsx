@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { supabase, isConfigured } from "./lib/supabase.js";
+import * as EIA from "./lib/eiaLaw.js";
 
 // ── OFFLINE STORE (IndexedDB) ─────────────────────────────────────────────────
 const DB_NAME = "eia-toolkit", DB_VERSION = 2;
@@ -2647,75 +2648,129 @@ function NewProjectModal({ onSave, onCancel, savedTemplates=[], onSaveTemplate, 
 
 // ─── SCOPING MODULE ───────────────────────────────────────────────────────────
 function ScopingModule() {
-  const [pType,setPType]=useState("wind");
+  const [pType,setPType]=useState("power");
+  const [subtype,setSubtype]=useState("wind");
   const [pref,setPref]=useState("北海道");
   const [done,setDone]=useState(false);
-  const rows=[
-    {g:"植物",          m:["植生図作成","希少種重点調査"],          s:["春・夏・秋"],p:"高"},
-    {g:"哺乳類",        m:["自動撮影カメラ","フィールドサイン調査"],s:["通年"],      p:"高"},
-    {g:"鳥類（繁殖期）",m:["ラインセンサス","定点観察"],            s:["4〜7月"],    p:"高"},
-    {g:"鳥類（越冬期）",m:["ラインセンサス","定点観察"],            s:["11〜2月"],   p:"中"},
-    {g:"両生類・爬虫類",m:["直接観察","トラップ調査"],              s:["春・夏"],    p:"中"},
-    {g:"魚類",          m:["電気ショッカー","投網"],                 s:["春・夏・秋"],p:"低"},
-    {g:"昆虫類",        m:["ライトトラップ","スイーピング"],         s:["夏"],        p:"中"},
-  ];
+
+  const typeObj = EIA.LEGAL_TYPE_BY_KEY[pType];
+  const hasSubtypes = !!typeObj?.subtypes;
+  const itemKeys = EIA.selectedItemsFor(pType, hasSubtypes ? subtype : undefined);
+  const grouped = EIA.itemsByCategory(itemKeys);
+  // 選定項目のうち、厳密な調査手法（技術規格）が定義されているもの
+  const surveyRows = itemKeys
+    .map(k => ({ item: EIA.ENV_ITEM_BY_KEY[k], method: EIA.SURVEY_METHODS[EIA.ENV_ITEM_BY_KEY[k]?.survey] }))
+    .filter(r => r.method);
+  const focusText = hasSubtypes
+    ? typeObj.subtypes.find(s=>s.key===subtype)?.focus
+    : typeObj?.focus;
+
+  const sectionTitle = { fontFamily:"'Noto Serif JP',serif", fontSize:17, fontWeight:700,
+    color:C.text, margin:"26px 0 12px" };
+
   return <div>
     <h1 style={{ color:C.text, fontFamily:"'Noto Serif JP',serif",
       fontSize:28, fontWeight:700, margin:"0 0 6px" }}>スコーピング・調査設計</h1>
     <p style={{ color:C.textMuted, fontSize:14, marginBottom:28 }}>
-      環境省技術指針に基づき、調査対象・手法・スケジュールを自動提案します
+      法定13対象事業・環境影響評価法・技術指針に基づき、法定手続・項目選定・調査手法を自動生成します
     </p>
     <div style={{ display:"grid", gridTemplateColumns:"300px 1fr", gap:24 }}>
       <Card style={{ height:"fit-content" }}>
         <SLabel>事業条件を入力</SLabel>
-        {[
-          { l:"事業種別", el:<select value={pType} onChange={e=>setPType(e.target.value)} style={{ ...INP,fontSize:14 }}>
-            {Object.entries(ALL_PROJECT_TYPES.reduce((a,t)=>{a[t.g]=a[t.g]||[];a[t.g].push(t);return a;},{}))
-              .map(([grp,types])=><optgroup key={grp} label={grp}>{types.map(t=><option key={t.v} value={t.v}>{t.l}</option>)}</optgroup>)}</select> },
-          { l:"都道府県", el:<select value={pref} onChange={e=>setPref(e.target.value)} style={{ ...INP,fontSize:14 }}>
-            {["北海道","東京都","大阪府","愛知県","福岡県","沖縄県","長野県"].map(p=><option key={p}>{p}</option>)}</select> },
-        ].map(f2 => <div key={f2.l} style={{ marginBottom:16 }}>
-          <label style={{ display:"block", color:C.textMid, fontSize:14,
-            fontWeight:700, marginBottom:7 }}>{f2.l}</label>
-          {f2.el}
-        </div>)}
+        <div style={{ marginBottom:16 }}>
+          <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>法定対象事業</label>
+          <select value={pType} onChange={e=>{setPType(e.target.value);setDone(false);}} style={{ ...INP,fontSize:14,width:"100%" }}>
+            {Object.entries(EIA.LEGAL_PROJECT_TYPES.reduce((a,t)=>{a[t.group]=a[t.group]||[];a[t.group].push(t);return a;},{}))
+              .map(([grp,types])=><optgroup key={grp} label={grp}>
+                {types.map(t=><option key={t.key} value={t.key}>{t.icon} {t.label}</option>)}</optgroup>)}
+          </select>
+        </div>
+        {hasSubtypes && <div style={{ marginBottom:16 }}>
+          <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>発電種別</label>
+          <select value={subtype} onChange={e=>{setSubtype(e.target.value);setDone(false);}} style={{ ...INP,fontSize:14,width:"100%" }}>
+            {typeObj.subtypes.map(s=><option key={s.key} value={s.key}>{s.icon} {s.label}</option>)}
+          </select>
+        </div>}
+        <div style={{ marginBottom:16 }}>
+          <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>都道府県</label>
+          <select value={pref} onChange={e=>setPref(e.target.value)} style={{ ...INP,fontSize:14,width:"100%" }}>
+            {["北海道","青森県","東京都","神奈川県","長野県","愛知県","大阪府","広島県","福岡県","沖縄県"].map(p=><option key={p}>{p}</option>)}
+          </select>
+        </div>
+        {focusText && <div style={{ background:C.bg, border:`1px solid ${C.border}`, borderRadius:8,
+          padding:"10px 12px", fontSize:12, color:C.textMid, marginBottom:16 }}>
+          <strong style={{ color:C.text }}>重点項目：</strong>{focusText}
+        </div>}
         <Btn fullWidth onClick={()=>setDone(true)} size="lg">調査計画を自動生成 →</Btn>
       </Card>
+
       {done ? <div>
-        <div style={{ background:C.light, border:`1px solid ${C.primary}44`,
-          borderRadius:12, padding:"13px 18px", marginBottom:16,
-          display:"flex", alignItems:"center", gap:12 }}>
+        <div style={{ background:C.light, border:`1px solid ${C.primary}44`, borderRadius:12,
+          padding:"13px 18px", marginBottom:8, display:"flex", alignItems:"center", gap:12 }}>
           <span style={{ fontSize:20 }}>✅</span>
           <div style={{ flex:1 }}>
-            <div style={{ color:C.primary, fontSize:14, fontWeight:700 }}>調査計画を生成しました</div>
-            <div style={{ color:C.textMuted, fontSize:13 }}>環境省技術指針 + {pref}版レッドリストに基づいて自動生成</div>
+            <div style={{ color:C.primary, fontSize:14, fontWeight:700 }}>
+              {typeObj.label}{hasSubtypes?`（${typeObj.subtypes.find(s=>s.key===subtype)?.label}）`:""} の調査計画を生成しました
+            </div>
+            <div style={{ color:C.textMuted, fontSize:13 }}>環境影響評価法・技術指針 + {pref}版レッドリスト(RDB)に基づき自動選定</div>
           </div>
-          <Btn variant="secondary" size="sm" icon="📄">PDF出力</Btn>
         </div>
+
+        {/* 法定手続タイムライン */}
+        <div style={sectionTitle}>① 法定手続スケジュール（順序変更・省略は法律上不可）</div>
         <Card style={{ padding:0, overflow:"hidden" }}>
-          <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
             <thead><tr style={{ background:C.bg }}>
-              {["調査グループ","推奨調査手法","実施時期","優先度"].map(h=>(
-                <th key={h} style={{ padding:"11px 16px", textAlign:"left",
-                  color:C.textMuted, fontSize:11, fontFamily:"'DM Mono',monospace",
-                  borderBottom:`1px solid ${C.border}` }}>{h}</th>
-              ))}
+              {["段階","根拠条文","公告縦覧","住民説明会","知事意見期限"].map(h=><th key={h} style={{ padding:"10px 14px",
+                textAlign:"left", color:C.textMuted, fontSize:11, fontFamily:"'DM Mono',monospace", borderBottom:`1px solid ${C.border}` }}>{h}</th>)}
             </tr></thead>
-            <tbody>{rows.map((r,i)=>(
-              <tr key={i} style={{ borderBottom:`1px solid ${C.borderLight}` }}>
-                <td style={{ padding:"12px 16px",color:C.text,fontSize:14,fontWeight:700 }}>{r.g}</td>
-                <td style={{ padding:"12px 16px" }}><div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
-                  {r.m.map(m=><Chip key={m} color={C.textMuted}>{m}</Chip>)}
-                </div></td>
-                <td style={{ padding:"12px 16px",color:C.textMuted,fontSize:13 }}>{r.s.join(", ")}</td>
-                <td style={{ padding:"12px 16px" }}>
-                  <Chip color={r.p==="高"?C.red:r.p==="中"?C.amber:C.textMuted}
-                    bg={r.p==="高"?C.redLight:r.p==="中"?C.amberLight:C.bg}>{r.p}</Chip>
-                </td>
+            <tbody>{EIA.PROCEDURE_STAGES.map(s=>(
+              <tr key={s.id} style={{ borderBottom:`1px solid ${C.borderLight}` }}>
+                <td style={{ padding:"10px 14px" }}><Chip color="#fff" bg={s.color}>{s.short}</Chip>
+                  <span style={{ color:C.textMid, marginLeft:8 }}>{s.name}</span></td>
+                <td style={{ padding:"10px 14px", color:C.textMuted }}>{s.article}</td>
+                <td style={{ padding:"10px 14px", color:C.text }}>{s.juranDays?`${s.juranDays}日`:"—"}</td>
+                <td style={{ padding:"10px 14px" }}>{s.explanation?<Chip color={C.amber} bg={C.amberLight}>必須</Chip>:<span style={{color:C.textFaint}}>—</span>}</td>
+                <td style={{ padding:"10px 14px", color:C.text }}>{s.governorOpinionDays?`縦覧満了+${s.governorOpinionDays}日`:"—"}</td>
               </tr>
             ))}</tbody>
           </table>
         </Card>
+
+        {/* 項目選定マトリクス（4区分） */}
+        <div style={sectionTitle}>② 環境影響評価項目の選定（技術指針 環境4区分）</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:12 }}>
+          {Object.values(EIA.ENV_CATEGORIES).map(cat=>{
+            const items = grouped[cat.key];
+            return <Card key={cat.key}>
+              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+                <span style={{ width:10, height:10, borderRadius:3, background:cat.color }}/>
+                <span style={{ fontWeight:700, color:C.text, fontSize:14 }}>{cat.label}</span>
+                <span style={{ color:C.textFaint, fontSize:12 }}>{items.length}項目</span>
+              </div>
+              <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                {items.length ? items.map(it=><Chip key={it.key} color={cat.color} bg={cat.color+"18"}>{it.label}</Chip>)
+                  : <span style={{ color:C.textFaint, fontSize:12 }}>選定なし</span>}
+              </div>
+            </Card>;
+          })}
+        </div>
+
+        {/* 調査手法の技術仕様 */}
+        <div style={sectionTitle}>③ 調査手法の技術仕様（項目別・法定規格）</div>
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          {surveyRows.map(({item,method})=>(
+            <Card key={item.key}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginBottom:6 }}>
+                <span style={{ fontWeight:700, color:C.text, fontSize:15 }}>{item.label}</span>
+                <Chip color={C.primary} bg={C.light}>{method.method}</Chip>
+                {method.standard && <Chip color={C.textMuted} bg={C.bg}>規格: {method.standard}</Chip>}
+                {method.seasons?.length ? <Chip color={C.amber} bg={C.amberLight}>{method.seasons.join("・")}（四季）</Chip> : null}
+              </div>
+              <div style={{ color:C.textMid, fontSize:13, lineHeight:1.7 }}>{method.spec}</div>
+            </Card>
+          ))}
+        </div>
       </div> : <div style={{ background:C.surface, border:`2px dashed ${C.border}`,
         borderRadius:14, padding:64, textAlign:"center" }}>
         <div style={{ fontSize:48, marginBottom:14 }}>⬡</div>
