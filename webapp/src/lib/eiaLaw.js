@@ -446,6 +446,150 @@ export function itemsByCategory(itemKeys) {
   return groups
 }
 
+/** アプリ側の事業タイプキー → 法定タイプ（発電所サブタイプ含む）を解決 */
+export function resolveLegalType(appTypeKey) {
+  if (LEGAL_TYPE_BY_KEY[appTypeKey]) return { typeKey: appTypeKey, subtypeKey: null }
+  const alias = { geo: 'geothermal', dam: 'river', housing: 'newtown' }
+  const key = alias[appTypeKey] || appTypeKey
+  if (LEGAL_TYPE_BY_KEY[key]) return { typeKey: key, subtypeKey: null }
+  for (const t of LEGAL_PROJECT_TYPES) {
+    if (t.subtypes) {
+      const st = t.subtypes.find((s) => s.key === key)
+      if (st) return { typeKey: t.key, subtypeKey: st.key }
+    }
+  }
+  return { typeKey: null, subtypeKey: null }
+}
+
+const esc = (s) =>
+  String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+
+/**
+ * 方法書 / 準備書 の法定構成に沿った HTML ドキュメントを、案件データから生成する。
+ * 印刷（PDF）・Word(.doc) 保存の両方に使える自己完結HTMLを返す。
+ * @param {'hoho'|'junbi'} kind
+ * @param {object} project アプリの案件オブジェクト
+ */
+export function buildDocument(kind, project) {
+  const tpl = kind === 'junbi' ? JUNBISHO_TEMPLATE : HOHOSHO_TEMPLATE
+  const { typeKey, subtypeKey } = resolveLegalType(project?.type)
+  const typeObj = typeKey ? LEGAL_TYPE_BY_KEY[typeKey] : null
+  const typeLabel = typeObj
+    ? typeObj.label + (subtypeKey ? `（${typeObj.subtypes.find((s) => s.key === subtypeKey)?.label}）` : '')
+    : project?.type || '—'
+  const itemKeys = typeKey ? selectedItemsFor(typeKey, subtypeKey) : ENV_ITEMS.map((i) => i.key)
+  const grouped = itemsByCategory(itemKeys)
+  const today = new Date().toLocaleDateString('ja-JP')
+  const species = project?.species || []
+
+  // 章ごとに、該当データがあれば差し込む
+  const chapterBody = (ch) => {
+    // 方法書 第4章：項目選定マトリクス
+    if (kind === 'hoho' && ch.n === 4) {
+      return (
+        `<table class="tbl"><thead><tr><th>環境区分</th><th>選定項目</th></tr></thead><tbody>` +
+        Object.values(ENV_CATEGORIES)
+          .map(
+            (cat) =>
+              `<tr><td><b>${esc(cat.label)}</b></td><td>${
+                grouped[cat.key].map((i) => esc(i.label)).join('、') || '<span class="muted">選定なし</span>'
+              }</td></tr>`
+          )
+          .join('') +
+        `</tbody></table>`
+      )
+    }
+    // 方法書 第5章：調査手法の技術仕様
+    if (kind === 'hoho' && ch.n === 5) {
+      const rows = itemKeys
+        .map((k) => ({ item: ENV_ITEM_BY_KEY[k], m: SURVEY_METHODS[ENV_ITEM_BY_KEY[k]?.survey] }))
+        .filter((r) => r.m)
+      return (
+        `<table class="tbl"><thead><tr><th>項目</th><th>調査手法</th><th>規格</th><th>時期</th></tr></thead><tbody>` +
+        rows
+          .map(
+            (r) =>
+              `<tr><td>${esc(r.item.label)}</td><td>${esc(r.m.method)}<div class="muted small">${esc(
+                r.m.spec
+              )}</div></td><td>${esc(r.m.standard || '—')}</td><td>${esc(
+                r.m.seasons?.join('・') || '—'
+              )}</td></tr>`
+          )
+          .join('') +
+        `</tbody></table>`
+      )
+    }
+    // 準備書 第4章：実施結果（確認種リスト）
+    if (kind === 'junbi' && ch.n === 4) {
+      const rl = species.filter((s) => ['CR', 'EN', 'VU', 'NT'].includes(s.status))
+      const list = species.length
+        ? `<p>確認種数：<b>${species.length}</b>種（うち重要種 <b>${rl.length}</b>種）</p>` +
+          `<table class="tbl"><thead><tr><th>和名</th><th>学名</th><th>分類</th><th>カテゴリ</th><th>確認地点</th></tr></thead><tbody>` +
+          species
+            .map(
+              (s) =>
+                `<tr><td>${esc(s.name)}</td><td><i>${esc(s.latin || '')}</i></td><td>${esc(
+                  s.type || ''
+                )}</td><td>${
+                  ['CR', 'EN', 'VU', 'NT'].includes(s.status)
+                    ? `<b style="color:#b91c1c">${esc(s.status)}</b>`
+                    : esc(s.status || '')
+                }</td><td>${esc(s.location || '')}</td></tr>`
+            )
+            .join('') +
+          `</tbody></table>`
+        : '<p class="muted">確認種データが未登録です。案件の「種記録」から入力してください。</p>'
+      return (
+        list +
+        ch.sub.map((s) => `<h3>${esc(s)}</h3><p class="ph">［記載欄］</p>`).join('')
+      )
+    }
+    // それ以外：小見出し + 記載欄
+    return ch.sub.length
+      ? ch.sub.map((s) => `<h3>${esc(s)}</h3><p class="ph">［記載欄］</p>`).join('')
+      : '<p class="ph">［記載欄］</p>'
+  }
+
+  const chaptersHtml = tpl.chapters
+    .map(
+      (ch) =>
+        `<section><h2>${ch.n === '巻末' ? '' : `第${ch.n}章　`}${esc(ch.title)}</h2>${chapterBody(ch)}</section>`
+    )
+    .join('')
+
+  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>${esc(tpl.title)} — ${esc(
+    project?.name || ''
+  )}</title><style>
+    body{font-family:'Noto Serif JP','Yu Mincho',serif;color:#1a1f1c;max-width:820px;margin:0 auto;padding:48px 40px;line-height:1.8}
+    .cover{text-align:center;padding:120px 0 80px;border-bottom:3px double #1B4332}
+    .cover h1{font-size:30px;margin:0 0 40px}.cover .name{font-size:22px;font-weight:700}
+    .meta{margin-top:60px;color:#4a5550;font-size:15px}
+    h2{font-size:19px;border-left:6px solid #1B4332;padding-left:12px;margin:38px 0 14px}
+    h3{font-size:15px;color:#2D6A4F;margin:18px 0 6px}
+    .ph{color:#8a948e;background:#f7f5ef;border:1px dashed #ddd8ce;padding:8px 12px;border-radius:6px}
+    .tbl{width:100%;border-collapse:collapse;margin:10px 0;font-family:'Noto Sans JP',sans-serif;font-size:13px}
+    .tbl th{background:#1B4332;color:#fff;padding:8px 10px;text-align:left}
+    .tbl td{border:1px solid #ddd8ce;padding:8px 10px;vertical-align:top}
+    .muted{color:#8a948e}.small{font-size:12px;margin-top:4px}
+    @media print{body{padding:0}.cover{padding:200px 0 100px}}
+  </style></head><body>
+    <div class="cover">
+      <h1>${esc(tpl.title)}</h1>
+      <div class="name">${esc(project?.name || '（案件名未設定）')}</div>
+      <div class="meta">
+        事業者：${esc(project?.client || '—')}<br>
+        対象事業：${esc(typeLabel)}<br>
+        実施区域：${esc(project?.pref || '—')}<br>
+        作成日：${esc(today)}
+      </div>
+    </div>
+    ${chaptersHtml}
+    <p class="muted small" style="margin-top:60px;text-align:center">
+      本書はEIAツールキットにより法定構成（主務省令）に基づき自動生成された草案です。提出前に内容をご確認ください。
+    </p>
+  </body></html>`
+}
+
 /**
  * 縦覧開始日から法定期限を計算する。
  * @returns {{ juranEnd: Date|null, governorOpinion: Date|null }}

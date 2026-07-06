@@ -2783,76 +2783,106 @@ function ScopingModule() {
 }
 
 // ─── REPORT MODULE ────────────────────────────────────────────────────────────
-function ReportModule() {
-  const [prog,setProg]=useState(0);
-  const [running,setRunning]=useState(false);
-  const [done,setDone]=useState(false);
-  const start=()=>{setRunning(true);setProg(0);setDone(false);
-    const iv=setInterval(()=>setProg(p=>{if(p>=100){clearInterval(iv);setRunning(false);setDone(true);return 100;}return p+3;}),70);};
+function ReportModule({ projects=[] }) {
+  const [projectId,setProjectId]=useState(projects[0]?.id || "");
+  const [kind,setKind]=useState("hoho"); // hoho | junbi
+  const project = projects.find(p=>String(p.id)===String(projectId));
+  const kindLabel = kind==="junbi" ? "準備書" : "方法書";
+
+  function generate(){
+    if(!project) return;
+    return EIA.buildDocument(kind, project);
+  }
+  function openPrint(){
+    const html = generate(); if(!html) return;
+    const w = window.open("", "_blank");
+    if(!w){ alert("ポップアップがブロックされました。ブラウザの設定で許可してください。"); return; }
+    w.document.write(html); w.document.close();
+    setTimeout(()=>w.print(), 400); // 印刷ダイアログ→PDF保存が可能
+  }
+  function downloadDoc(){
+    const html = generate(); if(!html) return;
+    const blob = new Blob(["﻿", html], { type:"application/msword" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${kindLabel}_${(project?.name||"案件").replace(/[\\/:*?"<>|]/g,"_")}.doc`;
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  }
+
+  const speciesCount = project?.species?.length || 0;
+  const rlCount = (project?.species||[]).filter(s=>["CR","EN","VU","NT"].includes(s.status)).length;
+
   return <div>
     <h1 style={{ color:C.text, fontFamily:"'Noto Serif JP',serif",
-      fontSize:28, fontWeight:700, margin:"0 0 6px" }}>報告書生成</h1>
+      fontSize:28, fontWeight:700, margin:"0 0 6px" }}>法定図書の生成</h1>
     <p style={{ color:C.textMuted, fontSize:14, marginBottom:28 }}>
-      確認種データから評価書・準備書の生物多様性章をワンクリックで生成
+      案件データから、主務省令の章建て構成に沿った方法書・準備書の草案をワンクリックで生成します（PDF印刷・Word保存対応）
     </p>
-    <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:14, marginBottom:24 }}>
-      {[
-        {t:"環境省・国交省標準EIS",  d:"生物多様性章（Word + PDF）",  icon:"🏛️",ok:true},
-        {t:"都道府県別行政書式",      d:"47都道府県フォーマット対応",  icon:"📍",ok:true},
-        {t:"TNFD LEAP整合出力",      d:"投資家向け自然関連情報開示",  icon:"📊",ok:true},
-        {t:"公聴会用サマリー資料",   d:"市民向け生物多様性概要",      icon:"👥",ok:false},
-      ].map(c=><Card key={c.t} style={{ opacity:c.ok?1:0.55 }}>
-        <div style={{ display:"flex",gap:14,alignItems:"center" }}>
-          <span style={{ fontSize:28 }}>{c.icon}</span>
-          <div style={{ flex:1 }}>
-            <div style={{ color:C.text,fontSize:14,fontWeight:700 }}>{c.t}</div>
-            <div style={{ color:C.textMuted,fontSize:13,marginTop:2 }}>{c.d}</div>
-          </div>
-          <div style={{ width:11,height:11,borderRadius:"50%",
-            background:c.ok?C.mid:C.textFaint,flexShrink:0 }}/>
+
+    <div style={{ display:"grid", gridTemplateColumns:"340px 1fr", gap:24 }}>
+      <Card style={{ height:"fit-content" }}>
+        <SLabel>出力設定</SLabel>
+        <div style={{ marginBottom:16 }}>
+          <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>対象案件</label>
+          <select value={projectId} onChange={e=>setProjectId(e.target.value)} style={{ ...INP, fontSize:14, width:"100%" }}>
+            {projects.length===0 && <option value="">案件がありません</option>}
+            {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
         </div>
-      </Card>)}
+        <div style={{ marginBottom:18 }}>
+          <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>図書種別</label>
+          <div style={{ display:"flex", gap:8 }}>
+            {[{k:"hoho",l:"方法書"},{k:"junbi",l:"準備書"}].map(o=>(
+              <button key={o.k} onClick={()=>setKind(o.k)} style={{ flex:1, padding:"10px",
+                borderRadius:8, border:`2px solid ${kind===o.k?C.primary:C.border}`,
+                background:kind===o.k?C.light:C.surface, color:kind===o.k?C.primary:C.textMuted,
+                fontWeight:700, fontSize:14, cursor:"pointer" }}>{o.l}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          <Btn fullWidth size="lg" icon="📄" onClick={openPrint} disabled={!project}>PDFで印刷 / 保存</Btn>
+          <Btn fullWidth size="lg" variant="secondary" icon="⬇️" onClick={downloadDoc} disabled={!project}>Word (.doc) をダウンロード</Btn>
+        </div>
+        <div style={{ marginTop:16, fontSize:12, color:C.textMuted, lineHeight:1.7 }}>
+          「PDFで印刷」→ 印刷ダイアログで「PDFに保存」を選択できます。
+        </div>
+      </Card>
+
+      {project ? <div>
+        <Card style={{ marginBottom:14 }}>
+          <SLabel>生成内容プレビュー</SLabel>
+          <div style={{ color:C.text, fontSize:16, fontWeight:700, marginBottom:4,
+            fontFamily:"'Noto Serif JP',serif" }}>{kindLabel} — {project.name}</div>
+          <div style={{ color:C.textMuted, fontSize:13, marginBottom:12 }}>
+            事業者：{project.client||"—"} ／ 実施区域：{project.pref||"—"}
+          </div>
+          <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+            <Chip color={C.primary} bg={C.light}>確認種 {speciesCount}件</Chip>
+            <Chip color={C.red} bg={C.redLight}>重要種 {rlCount}件</Chip>
+            <Chip color={C.textMuted} bg={C.bg}>主務省令 章建て準拠</Chip>
+          </div>
+        </Card>
+        <Card>
+          <SLabel>含まれる章（{kindLabel}）</SLabel>
+          <ol style={{ margin:"6px 0 0", paddingLeft:20, color:C.textMid, fontSize:14, lineHeight:2 }}>
+            {(kind==="junbi"?EIA.JUNBISHO_TEMPLATE:EIA.HOHOSHO_TEMPLATE).chapters.map((ch,i)=>(
+              <li key={i} style={{ listStyle:ch.n==="巻末"?"none":"decimal" }}>
+                {ch.title}
+                {((kind==="hoho"&&(ch.n===4||ch.n===5))||(kind==="junbi"&&ch.n===4)) &&
+                  <Chip color={C.mid} bg={C.light} size={11}>案件データを自動差込</Chip>}
+              </li>
+            ))}
+          </ol>
+        </Card>
+      </div> : <div style={{ background:C.surface, border:`2px dashed ${C.border}`,
+        borderRadius:14, padding:64, textAlign:"center" }}>
+        <div style={{ fontSize:48, marginBottom:14 }}>📄</div>
+        <div style={{ color:C.textMuted, fontSize:15 }}>案件を選択してください</div>
+      </div>}
     </div>
-    <Card>
-      <SLabel>出力設定</SLabel>
-      <div style={{ display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14,marginBottom:22 }}>
-        {[{l:"対象プロジェクト",v:"プロジェクトを選択…"},{l:"報告書種別",v:"準備書 第4章 生物多様性"},{l:"都道府県書式",v:"都道府県を選択…"}].map(f=>(
-          <div key={f.l}>
-            <div style={{ color:C.textMid,fontSize:14,fontWeight:700,marginBottom:6 }}>{f.l}</div>
-            <div style={{ background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"11px 14px",color:C.textMuted,fontSize:14 }}>{f.v}</div>
-          </div>
-        ))}
-      </div>
-      {!done&&<Btn onClick={start} disabled={running} size="lg" icon="📋">
-        {running?"生成中...":"報告書を生成する"}</Btn>}
-      {running&&<div style={{ marginTop:16 }}>
-        <div style={{ display:"flex",justifyContent:"space-between",marginBottom:6 }}>
-          <span style={{ color:C.textMuted,fontSize:14 }}>
-            {prog<30?"フィールドデータを読み込み中...":prog<60?"レッドリスト照合中...":prog<85?"書式を適用中...":"最終確認中..."}
-          </span>
-          <span style={{ color:C.primary,fontFamily:"'DM Mono',monospace",fontSize:14,fontWeight:700 }}>{prog}%</span>
-        </div>
-        <div style={{ height:14,background:C.bg,borderRadius:7,overflow:"hidden" }}>
-          <div style={{ height:"100%",width:`${prog}%`,
-            background:`linear-gradient(90deg,${C.primary},${C.mid})`,borderRadius:7,transition:"width 0.1s" }}/>
-        </div>
-      </div>}
-      {done&&<div style={{ marginTop:16,background:C.light,border:`1px solid ${C.primary}44`,borderRadius:12,padding:"18px 22px" }}>
-        <div style={{ color:C.primary,fontSize:15,fontWeight:700,marginBottom:12 }}>✅ 報告書の生成が完了しました</div>
-        <div style={{ display:"flex",gap:10,flexWrap:"wrap",marginBottom:12 }}>
-          {["準備書_第4章_生物多様性.docx","準備書_第4章_生物多様性.pdf","種リスト.xlsx"].map(f=>(
-            <div key={f} style={{ background:C.surface,border:`1px solid ${C.border}`,
-              borderRadius:8,padding:"10px 14px",display:"flex",alignItems:"center",gap:7,cursor:"pointer",boxShadow:C.shadow }}>
-              <span style={{ fontSize:18 }}>📄</span>
-              <span style={{ color:C.text,fontSize:12,fontWeight:500 }}>{f}</span>
-            </div>
-          ))}
-        </div>
-        <div style={{ color:C.textMuted,fontSize:13 }}>
-          ⏱ 生成時間: 2分14秒 · <strong style={{ color:C.primary }}>従来の手動作業（約3週間）を99%削減</strong>
-        </div>
-      </div>}
-    </Card>
   </div>;
 }
 
@@ -3685,7 +3715,7 @@ export default function App() {
         onDelete={handleDeleteProject} currentUser={currentUser}/>;
       case "scoping":    return <ScopingModule/>;
       case "species":    return <SpeciesModule/>;
-      case "reports":    return <ReportModule/>;
+      case "reports":    return <ReportModule projects={projects}/>;
       case "compliance": return <ComplianceModule/>;
       case "monitoring": return <MonitoringModule/>;
       case "account":    return <AccountModule org={org} currentUser={currentUser}
