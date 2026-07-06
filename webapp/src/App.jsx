@@ -82,7 +82,7 @@ async function flushSyncQueue(sb) {
             continue;
           }
           const payload = sanitizeProjectPayload(entry.payload);
-          const {error}=await sb.from("projects").upsert(payload).select("id").single();
+          const {error}=await upsertProjectResilient(sb, payload);
           if(error) throw new Error(`${error.code}: ${error.message}`);
         } else if (entry.op==="delete") {
           const {error}=await sb.from("projects").delete().eq("id",pid);
@@ -131,7 +131,19 @@ function sanitizeProjectPayload(p) {
     comments:       p.comments        || [],
     project_class:  p.project_class   || p.projectClass   || "1",
     juran_dates:    p.juran_dates     || p.juranDates     || {},
+    activity:       p.activity        || [],
   };
+}
+
+// Upsert that degrades gracefully if the optional `activity` column hasn't
+// been added to the DB yet — so the audit trail never breaks project sync.
+async function upsertProjectResilient(sb, payload) {
+  let res = await sb.from("projects").upsert(payload);
+  if (res.error && (res.error.code === "PGRST204" || /activity/i.test(res.error.message || ""))) {
+    const { activity, ...rest } = payload;
+    res = await sb.from("projects").upsert(rest);
+  }
+  return res;
 }
 
 // ─── TOKENS ───────────────────────────────────────────────────────────────────
@@ -1146,7 +1158,7 @@ function DocumentsTab({ project, onUpdate }) {
 }
 
 
-function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTemplate }) {
+function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTemplate, currentUser }) {
   const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const [project, setProject] = useState(initProject);
   const [tab, setTab] = useState("work"); // work | info | species | documents
@@ -1174,7 +1186,19 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
 
   const push = (updated) => { setProject(updated); onUpdate(updated); };
 
+  // 監査証跡（誰が・いつ・何をしたか）。activity は JSONB 列に保存される。
+  const logActivity = (proj, action) => ({
+    ...proj,
+    activity: [
+      { id: crypto.randomUUID(), action, by: currentUser?.name || "不明",
+        at: new Date().toLocaleString("ja-JP") },
+      ...(proj.activity || []),
+    ].slice(0, 500),
+  });
+
   const toggleTask = (taskId) => {
+    const task = (project.tasks[project.stage]||[]).find(t=>t.id===taskId);
+    const nowDone = !task?.done;
     const newTasks = { ...project.tasks,
       [project.stage]: project.tasks[project.stage].map(t =>
         t.id===taskId ? {...t, done:!t.done} : t) };
@@ -1182,7 +1206,8 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
     const stagesCompleted = projectStages.filter(s => (s.id < project.stage) ||
       (s.id===project.stage && allNowDone)).length;
     const newProgress = Math.round((stagesCompleted / projectStages.length) * 100);
-    push({ ...project, tasks:newTasks, progress:newProgress });
+    push(logActivity({ ...project, tasks:newTasks, progress:newProgress },
+      `タスクを${nowDone?"完了":"未完了に変更"}：${task?.label||""}`));
   };
 
   // タスクごとの記録（調査結果・数値・担当者メモ等）を保存。
@@ -1190,10 +1215,11 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
   const setTaskNote = (taskId, note) => {
     const cur = (project.tasks[project.stage]||[]).find(t=>t.id===taskId);
     if((cur?.note||"") === note) return; // 変更なしなら書き込まない
+    const label = (project.tasks[project.stage]||[]).find(t=>t.id===taskId)?.label || "";
     const newTasks = { ...project.tasks,
       [project.stage]: (project.tasks[project.stage]||[]).map(t =>
-        t.id===taskId ? {...t, note, noteAt:new Date().toLocaleDateString("ja-JP")} : t) };
-    push({ ...project, tasks:newTasks });
+        t.id===taskId ? {...t, note, noteBy:currentUser?.name||"", noteAt:new Date().toLocaleDateString("ja-JP")} : t) };
+    push(logActivity({ ...project, tasks:newTasks }, `記録を更新：${label}`));
   };
 
   const advanceStage = () => {
@@ -1201,7 +1227,8 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
     if (idx < 0 || idx >= projectStages.length - 1) return;
     const nextStage = projectStages[idx + 1].id;
     const newProgress = Math.round((idx + 1) / projectStages.length * 100);
-    push({ ...project, stage:nextStage, progress:newProgress });
+    push(logActivity({ ...project, stage:nextStage, progress:newProgress },
+      `段階を進行：${projectStages[idx+1]?.label||""}`));
   };
 
   const saveInfo = () => {
@@ -1210,27 +1237,34 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
   };
 
   const addSpecies = () => {
-    const isRL = ["CR","EN","VU","NT"].includes(newSp.status);
+    const editing = editSpIdx!==null;
+    const stamped = { ...newSp,
+      id: editing ? (project.species[editSpIdx]?.id ?? Date.now()) : Date.now(),
+      recordedBy: editing ? (project.species[editSpIdx]?.recordedBy || currentUser?.name) : currentUser?.name,
+      recordedAt: editing ? (project.species[editSpIdx]?.recordedAt || new Date().toLocaleDateString("ja-JP"))
+        : new Date().toLocaleDateString("ja-JP") };
     const updated = { ...project,
-      species: editSpIdx!==null
-        ? project.species.map((s,i) => i===editSpIdx ? newSp : s)
-        : [...project.species, {...newSp, id:Date.now()}],
+      species: editing
+        ? project.species.map((s,i) => i===editSpIdx ? stamped : s)
+        : [...project.species, stamped],
       redListCount: 0 };
     updated.redListCount = updated.species.filter(s=>["CR","EN","VU","NT"].includes(s.status)).length;
-    push(updated);
+    push(logActivity(updated, `${editing?"確認種を編集":"確認種を追加"}：${newSp.name||""}（${newSp.status}）`));
     setAddingSpecies(false); setNewSp({...BLANK_SPECIES}); setEditSpIdx(null);
   };
 
   const removeSpecies = (idx) => {
+    const removed = project.species[idx];
     const updated = { ...project, species: project.species.filter((_,i)=>i!==idx) };
     updated.redListCount = updated.species.filter(s=>["CR","EN","VU","NT"].includes(s.status)).length;
-    push(updated);
+    push(logActivity(updated, `確認種を削除：${removed?.name||""}`));
   };
 
   const addComment = () => {
     if (!comment.trim()) return;
-    const c = { id:Date.now(), text:comment, author:"田中 誠一", date:new Date().toLocaleDateString("ja-JP"), role:"pm" };
-    push({ ...project, comments:[...project.comments, c] });
+    const c = { id:Date.now(), text:comment, author:currentUser?.name||"不明",
+      date:new Date().toLocaleDateString("ja-JP"), role:currentUser?.role||"" };
+    push(logActivity({ ...project, comments:[...project.comments, c] }, `コメントを投稿`));
     setComment(""); setMentionQuery(null);
   };
 
@@ -1289,6 +1323,7 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
     { id:"info",      label:"📁 プロジェクト情報" },
     { id:"species",   label:`🌿 確認種リスト (${project.species.length})` },
     { id:"documents", label:"📄 文書管理" },
+    { id:"history",   label:`🕐 変更履歴 (${(project.activity||[]).length})` },
   ];
 
   return <div>
@@ -1935,7 +1970,39 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
     </div>}
 
     {/* ── TAB: DOCUMENTS ── */}
-    {tab==="documents" && <DocumentsTab project={project} onUpdate={push} />}
+    {tab==="documents" && <DocumentsTab project={project}
+      onUpdate={(u)=>push(logActivity(u, "文書を更新（追加・状態変更）"))} />}
+
+    {/* ── TAB: HISTORY (audit trail) ── */}
+    {tab==="history" && <div>
+      <SLabel>変更履歴 — 誰が・いつ・何をしたか</SLabel>
+      <div style={{ color:C.textMuted, fontSize:13, marginBottom:16 }}>
+        タスク完了・記録更新・確認種の追加/削除・段階進行・文書更新・コメントを時系列で記録します（監査・引継ぎ用）。
+      </div>
+      {(project.activity||[]).length === 0
+        ? <Card><div style={{ padding:"28px", textAlign:"center", color:C.textMuted, fontSize:14 }}>
+            まだ記録がありません。作業を行うとここに履歴が残ります。
+          </div></Card>
+        : <Card style={{ padding:0, overflow:"hidden" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+              <thead><tr style={{ background:C.bg }}>
+                {["日時","担当者","操作"].map(h=><th key={h} style={{ padding:"10px 16px",
+                  textAlign:"left", color:C.textMuted, fontSize:11, fontFamily:"'DM Mono',monospace",
+                  borderBottom:`1px solid ${C.border}` }}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {(project.activity||[]).map(a=>(
+                  <tr key={a.id} style={{ borderBottom:`1px solid ${C.borderLight}` }}>
+                    <td style={{ padding:"9px 16px", color:C.textMuted, whiteSpace:"nowrap",
+                      fontFamily:"'DM Mono',monospace", fontSize:12 }}>{a.at}</td>
+                    <td style={{ padding:"9px 16px", color:C.text, fontWeight:600, whiteSpace:"nowrap" }}>{a.by}</td>
+                    <td style={{ padding:"9px 16px", color:C.textMid }}>{a.action}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>}
+    </div>}
 
     {/* ── ADD/EDIT SPECIES MODAL ── */}
     {addingSpecies && <div style={{ position:"fixed", inset:0,
@@ -3476,7 +3543,7 @@ export default function App() {
             redListCount: row.red_list_count||0, tasks: row.tasks||{},
             customStages: row.custom_stages||null, species: row.species_data||[],
             comments: row.comments||[], documents: row.documents||[],
-            projectClass: row.project_class||"1", juranDates: row.juran_dates||{},
+            projectClass: row.project_class||"1", juranDates: row.juran_dates||{}, activity: row.activity||[],
           }));
           setProjects(mapped);
           for(const p of mapped) saveProjectLocal(p).catch(()=>{});
@@ -3617,7 +3684,7 @@ export default function App() {
               redListCount: row.red_list_count||0, tasks: row.tasks||{},
               customStages: row.custom_stages||null, species: row.species_data||[],
               comments: row.comments||[], documents: row.documents||[],
-              projectClass: row.project_class||"1", juranDates: row.juran_dates||{},
+              projectClass: row.project_class||"1", juranDates: row.juran_dates||{}, activity: row.activity||[],
             };
 
             setProjects(prev => {
@@ -3696,7 +3763,7 @@ export default function App() {
     if(navigator.onLine){
       // Mark as recently written BEFORE the request so Realtime echo is suppressed
       recentlyWritten.current.add(uid);
-      const { error } = await supabase.from("projects").upsert(clean);
+      const { error } = await upsertProjectResilient(supabase, clean);
       if(error){
         recentlyWritten.current.delete(uid);
         console.error("[Sync] upsert failed:", error.message, error.code);
@@ -3759,7 +3826,7 @@ export default function App() {
 
   const renderMain=()=>{
     if(active==="project"&&selectedProject)
-      return <ProjectDetail project={selectedProject} setActive={setActive} onUpdate={updateProject} onSaveTemplate={handleSaveTemplate}/>;
+      return <ProjectDetail project={selectedProject} setActive={setActive} onUpdate={updateProject} onSaveTemplate={handleSaveTemplate} currentUser={currentUser}/>;
     switch(active){
       case "dashboard":  return <Dashboard projects={projects} setSelectedProject={setSelectedProject}
         setActive={setActive} onNew={()=>setShowNew(true)}
