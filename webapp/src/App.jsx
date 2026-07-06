@@ -3042,13 +3042,14 @@ function ProfileSettingsModal({ currentUser, onClose, initialTab="profile" }) {
   </div>;
 }
 
-function AccountModule({ org, currentUser }) {
+function AccountModule({ org, currentUser, members=[], onUpdateRole, projectCount=0 }) {
   const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const [tab,setTab]=useState("team");
   const [inviting,setInviting]=useState(false);
   const isAdmin = ["admin","pm"].includes(currentUser?.role);
+  const canEditRoles = currentUser?.role === "admin"; // 役割変更は管理者のみ（RLS準拠）
   const plan = PLANS[org?.plan||"starter"];
-  const memberCount = TEAM.length;
+  const memberCount = members.length;
   const atUserLimit = memberCount >= plan.maxUsers;
   const TABS = {
     team: "チームメンバー",
@@ -3073,7 +3074,7 @@ function AccountModule({ org, currentUser }) {
             <div style={{ color:C.text,fontSize:18,fontWeight:700,
               fontFamily:"'Noto Serif JP',serif" }}>{org.name}</div>
             <div style={{ color:C.textMuted,fontSize:14,marginTop:4 }}>
-              {org.users}名 · {org.projects}件
+              {memberCount}名 · {projectCount}件
             </div>
             <div style={{ marginTop:8,display:"flex",gap:8 }}>
               <Chip color={C.primary} bg={C.light}>{PLANS[org.plan].label}プラン</Chip>
@@ -3133,6 +3134,10 @@ function AccountModule({ org, currentUser }) {
       {inviting&&<Card style={{ marginBottom:16,padding:"18px 20px",
         background:C.light,border:`1px solid ${C.primary}44`,boxShadow:"none" }}>
         <SLabel>新規メンバーを招待する</SLabel>
+        <div style={{ fontSize:12, color:C.textMid, lineHeight:1.7, marginBottom:14,
+          background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px" }}>
+          ℹ️ 招待するとメンバーにメールが届きます。相手が初回ログインすると、この組織の一員として自動的に一覧へ表示され、以降は役割をここで変更できます。
+        </div>
         <div style={{ display:"flex",gap:12,alignItems:"flex-end" }}>
           <div style={{ flex:2 }}>
             <label style={{ display:"block",color:C.textMid,fontSize:14,fontWeight:700,marginBottom:6 }}>メールアドレス</label>
@@ -3158,30 +3163,40 @@ function AccountModule({ org, currentUser }) {
             ))}
           </tr></thead>
           <tbody>
-            {TEAM.map(m=>{const r=ROLE_CFG[m.role];return <tr key={m.id}
+            {memberCount===0 && <tr><td colSpan={6} style={{ padding:"28px 18px",
+              textAlign:"center", color:C.textMuted, fontSize:13 }}>
+              メンバーはまだ登録されていません（初回ログイン時に自動でここに表示されます）
+            </td></tr>}
+            {members.map(m=>{const r=ROLE_CFG[m.role]||ROLE_CFG.surveyor;return <tr key={m.id}
               style={{ borderBottom:`1px solid ${C.borderLight}` }}>
               <td style={{ padding:"12px 18px" }}>
                 <div style={{ display:"flex",alignItems:"center",gap:10 }}>
                   <div style={{ width:34,height:34,borderRadius:"50%",
                     background:`linear-gradient(135deg,${C.primary},${C.blue})`,
                     display:"flex",alignItems:"center",justifyContent:"center",
-                    color:C.white,fontWeight:700,fontSize:14,flexShrink:0 }}>{m.name[0]}</div>
-                  <span style={{ color:C.text,fontSize:14,fontWeight:600 }}>{m.name}</span>
+                    color:C.white,fontWeight:700,fontSize:14,flexShrink:0 }}>{(m.name||"?")[0]}</div>
+                  <span style={{ color:C.text,fontSize:14,fontWeight:600 }}>{m.name}
+                    {m.self && <span style={{ color:C.textFaint,fontSize:12,fontWeight:400,marginLeft:6 }}>（あなた）</span>}
+                  </span>
                 </div>
               </td>
-              <td style={{ padding:"12px 18px",color:C.textMuted,fontSize:13 }}>{m.email}</td>
-              <td style={{ padding:"12px 18px" }}><Chip color={r.color} bg={r.badge}>{r.label}</Chip></td>
+              <td style={{ padding:"12px 18px",color:C.textMuted,fontSize:13 }}>{m.email||"—"}</td>
+              <td style={{ padding:"12px 18px" }}>
+                {canEditRoles && !m.self
+                  ? <select value={m.role} onChange={e=>onUpdateRole?.(m.id, e.target.value)}
+                      style={{ ...INP, padding:"6px 10px", fontSize:13 }}>
+                      {Object.entries(ROLE_CFG).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+                    </select>
+                  : <Chip color={r.color} bg={r.badge}>{r.label}</Chip>}
+              </td>
               <td style={{ padding:"12px 18px",color:C.textMuted,fontSize:13,fontFamily:"'DM Mono',monospace" }}>{m.joined}</td>
               <td style={{ padding:"12px 18px" }}>
                 <Chip color={m.active?C.mid:C.textMuted} bg={m.active?C.light:C.bg}>
                   {m.active?"アクティブ":"招待済"}
                 </Chip>
               </td>
-              <td style={{ padding:"12px 18px" }}>
-                <div style={{ display:"flex",gap:6 }}>
-                  <Btn variant="ghost" size="sm">編集</Btn>
-                  <Btn variant="danger" size="sm">削除</Btn>
-                </div>
+              <td style={{ padding:"12px 18px",color:C.textFaint,fontSize:12 }}>
+                {canEditRoles && !m.self ? "役割を変更可" : "—"}
               </td>
             </tr>;})}
           </tbody>
@@ -3344,6 +3359,7 @@ export default function App() {
   const [syncError, setSyncError] = useState(null);
   const [savedTemplates, setSavedTemplates] = useState([]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [members, setMembers] = useState([]); // 組織メンバー（profilesから取得）
 
   // ── Supabase session persistence ──────────────────────
   useEffect(()=>{
@@ -3358,6 +3374,21 @@ export default function App() {
         setCurrentUser({ id:session.user.id, name:profile?.name||session.user.email,
           email:session.user.email, role:profile?.role||"pm" });
         setLoggedIn(true);
+
+        // ── 組織メンバー（チーム名簿）を取得 ──
+        // RLSにより同一組織のprofilesのみ取得可能。全メンバーが全案件を管理できる。
+        if(orgData?.id){
+          const { data:mem } = await supabase
+            .from("profiles").select("id, name, role, created_at")
+            .eq("organization_id", orgData.id)
+            .order("created_at", { ascending:true });
+          if(mem) setMembers(mem.map(m=>({
+            id:m.id, name:m.name||"（名称未設定）", role:m.role||"surveyor",
+            joined:m.created_at?new Date(m.created_at).toLocaleDateString("ja-JP"):"—",
+            email:m.id===session.user.id?session.user.email:"",
+            active:true, self:m.id===session.user.id,
+          })));
+        }
 
         // Fetch authoritative project list now that we have a session
         const { data: rows } = await supabase
@@ -3401,10 +3432,20 @@ export default function App() {
       }
     });
     const { data:{ subscription } } = supabase.auth.onAuthStateChange((event)=>{
-      if(event==="SIGNED_OUT"){ setLoggedIn(false); setOrg(null); setCurrentUser(null); }
+      if(event==="SIGNED_OUT"){ setLoggedIn(false); setOrg(null); setCurrentUser(null); setMembers([]); }
     });
     return ()=> subscription.unsubscribe();
   },[]);
+
+  // ── メンバーの役割変更（管理者のみ）──────────────────────────────────────
+  async function handleUpdateMemberRole(memberId, newRole){
+    setMembers(ms => ms.map(m => m.id===memberId ? {...m, role:newRole} : m));
+    if(isConfigured){
+      const { error } = await supabase.from("profiles")
+        .update({ role:newRole }).eq("id", memberId);
+      if(error) console.error("役割更新エラー:", error.message);
+    }
+  }
 
   // ── Offline detection + sync ───────────────────────────────────────────────
   // Ref to suppress Realtime echoes of our own writes
@@ -3647,7 +3688,9 @@ export default function App() {
       case "reports":    return <ReportModule/>;
       case "compliance": return <ComplianceModule/>;
       case "monitoring": return <MonitoringModule/>;
-      case "account":    return <AccountModule org={org} currentUser={currentUser}/>;
+      case "account":    return <AccountModule org={org} currentUser={currentUser}
+                           members={members} onUpdateRole={handleUpdateMemberRole}
+                           projectCount={projects.length}/>;
       default: return null;
     }
   };
