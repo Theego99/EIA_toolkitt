@@ -4,7 +4,7 @@ import * as EIA from "./lib/eiaLaw.js";
 import { lookupSpecies, suggestSpecies, RED_LIST_NAMES } from "./lib/redList.js";
 
 // ── OFFLINE STORE (IndexedDB) ─────────────────────────────────────────────────
-const DB_NAME = "eia-toolkit", DB_VERSION = 2;
+const DB_NAME = "eia-toolkit", DB_VERSION = 3;
 let _db = null;
 async function openDB() {
   if (_db) return _db;
@@ -18,6 +18,9 @@ async function openDB() {
         sq.createIndex("by_table","table");
       }
       if (!db.objectStoreNames.contains("templates")) db.createObjectStore("templates", { keyPath:"id" });
+      // v3: offline upload queue — stores the actual file Blob so field
+      // uploads survive offline and are pushed to Storage when back online.
+      if (!db.objectStoreNames.contains("uploads")) db.createObjectStore("uploads", { keyPath:"id" });
     };
     req.onsuccess = e => { _db = e.target.result; res(_db); };
     req.onerror = () => rej(req.error);
@@ -103,6 +106,30 @@ async function flushSyncQueue(sb) {
     }
   }
   return { synced, failed, error:lastError };
+}
+
+// ── Offline upload queue (files / field photos) ─────────────────────────────
+async function saveUpload(rec) { await idbTx("uploads","readwrite", s=>s.put(rec)); }
+async function getUploads() { return idbGetAll("uploads"); }
+async function deleteUpload(id) { await idbTx("uploads","readwrite", s=>s.delete(id)); }
+
+// Push pending field uploads to Supabase Storage. onLinked(projectId, uploadId,
+// url, kind) writes the resulting public URL back onto the doc/photo record.
+async function flushUploads(sb, onLinked) {
+  if (!sb || !navigator.onLine) return { done:0, failed:0 };
+  const pending = await getUploads();
+  let done=0, failed=0;
+  for (const u of pending) {
+    try {
+      const { error } = await sb.storage.from("project-docs").upload(u.path, u.blob, { upsert:true });
+      if (error) throw error;
+      const { data } = sb.storage.from("project-docs").getPublicUrl(u.path);
+      if (onLinked) await onLinked(u.projectId, u.id, data?.publicUrl || null, u.kind);
+      await deleteUpload(u.id);
+      done++;
+    } catch(e) { console.warn("[Upload] pending failed", u.id, e.message); failed++; }
+  }
+  return { done, failed };
 }
 
 // Strip any keys not in the DB schema, ensure id is a valid UUID string
@@ -929,7 +956,7 @@ function fmtSize(bytes) {
   return (bytes/(1024*1024)).toFixed(1)+"MB";
 }
 
-function DocumentsTab({ project, onUpdate }) {
+function DocumentsTab({ project, onUpdate, currentUser }) {
   const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const [uploading, setUploading]   = useState(false);
   const [uploadProg, setUploadProg] = useState(0);
@@ -943,17 +970,19 @@ function DocumentsTab({ project, onUpdate }) {
   // ── helpers ─────────────────────────────────────────────────────────────
   const saveDoc = (updated) => onUpdate({ ...project, documents: updated });
 
-  const addDocRecord = (file, url) => {
+  const addDocRecord = (file, url, extra={}) => {
     const doc = {
-      id: `doc_${Date.now()}`,
+      id: `doc_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
       name: file.name,
       size: file.size,
       type: file.type,
-      url,  // null if Supabase not configured — falls back to object URL
+      url,  // null until uploaded (offline)
       status: "作業中",
-      uploadedBy: "自分",
+      uploadedBy: currentUser?.name || "自分",
       uploadedAt: new Date().toISOString().split("T")[0],
       stage: project.stage,
+      uploadId: extra.uploadId || null,
+      pending: !!extra.pending, // true = まだSupabase Storageへ未アップロード（オフライン）
     };
     saveDoc([...docs, doc]);
   };
@@ -968,43 +997,36 @@ function DocumentsTab({ project, onUpdate }) {
     setEditDoc(null);
   };
 
-  // ── upload ───────────────────────────────────────────────────────────────
+  // ── upload (offline-safe) ─────────────────────────────────────────────────
+  // 1) 常にまずローカル(IndexedDB)へBlobを保存 → 現場でオフラインでも消えない
+  // 2) オンラインなら即Storageへ。失敗/オフラインなら pending のまま、後で自動同期
   const handleFiles = async (files) => {
     for (const file of Array.from(files)) {
-      setUploading(true);
-      setUploadProg(0);
+      setUploading(true); setUploadProg(25);
+      const uploadId = `up_${Date.now()}_${Math.random().toString(36).slice(2,7)}`;
+      const path = `${project.id}/${Date.now()}_${file.name}`;
 
-      let url = null;
+      let url = null, pending = true;
       if (isConfigured) {
-        // Upload to Supabase Storage bucket "project-docs"
-        const path = `${project.id}/${Date.now()}_${file.name}`;
-        // Simulate progress (Supabase JS doesn't expose progress natively)
-        const prog = setInterval(() => setUploadProg(p => Math.min(p+15, 85)), 200);
-        const { data, error } = await supabase.storage
-          .from("project-docs")
-          .upload(path, file, { upsert: true });
-        clearInterval(prog);
-        if (!error) {
-          const { data: urlData } = supabase.storage
-            .from("project-docs")
-            .getPublicUrl(path);
-          url = urlData?.publicUrl || null;
+        // Persist the blob locally FIRST so an offline upload is never lost
+        await saveUpload({ id:uploadId, projectId:String(project.id), path,
+          blob:file, name:file.name, kind:"doc" }).catch(()=>{});
+        if (navigator.onLine) {
+          setUploadProg(70);
+          const { error } = await supabase.storage.from("project-docs").upload(path, file, { upsert:true });
+          if (!error) {
+            const { data } = supabase.storage.from("project-docs").getPublicUrl(path);
+            url = data?.publicUrl || null; pending = false;
+            await deleteUpload(uploadId).catch(()=>{});
+          }
         }
       } else {
-        // Demo mode: create object URL (works in-session)
-        url = URL.createObjectURL(file);
-        // Simulate upload
-        for (let i=0; i<=100; i+=20) {
-          await new Promise(r=>setTimeout(r,80));
-          setUploadProg(i);
-        }
+        url = URL.createObjectURL(file); pending = false; // demo mode
       }
 
       setUploadProg(100);
-      addDocRecord(file, url);
-      await new Promise(r=>setTimeout(r,300));
-      setUploading(false);
-      setUploadProg(0);
+      addDocRecord(file, url, { uploadId, pending });
+      setUploading(false); setUploadProg(0);
     }
   };
 
@@ -1118,6 +1140,7 @@ function DocumentsTab({ project, onUpdate }) {
               <span>·</span>
               <span>第{doc.stage}段階</span>
               {doc.uploadedBy && <><span>·</span><span>{doc.uploadedBy}</span></>}
+              {doc.pending && <span style={{ color:C.amber, fontWeight:700 }}>· ⏳ 同期待ち（オフライン保存済）</span>}
             </div>
           </div>
           {/* Status badge — click to change */}
@@ -1984,7 +2007,7 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
     </div>}
 
     {/* ── TAB: DOCUMENTS ── */}
-    {tab==="documents" && <DocumentsTab project={project}
+    {tab==="documents" && <DocumentsTab project={project} currentUser={currentUser}
       onUpdate={(u)=>push(logActivity(u, "文書を更新（追加・状態変更）"))} />}
 
     {/* ── TAB: HISTORY (audit trail) ── */}
@@ -3625,6 +3648,19 @@ export default function App() {
   // Ref to suppress Realtime echoes of our own writes
   const recentlyWritten = React.useRef(new Set());
 
+  // Mirror of projects for use inside sync callbacks (avoids stale closures)
+  const projectsRef = React.useRef(projects);
+  useEffect(()=>{ projectsRef.current = projects; }, [projects]);
+
+  // When a queued field upload finishes, write its public URL back onto the doc
+  const linkUpload = React.useCallback(async (projectId, uploadId, url) => {
+    const p = projectsRef.current.find(x => String(x.id)===String(projectId));
+    if(!p) return;
+    const documents = (p.documents||[]).map(d =>
+      d.uploadId===uploadId ? {...d, url, pending:false} : d);
+    await updateProject({ ...p, documents });
+  }, []);
+
   useEffect(()=>{
     // ── 1. Load templates ────────────────────────────────────────────────────
     getAllTemplates().then(setSavedTemplates).catch(()=>{});
@@ -3650,12 +3686,10 @@ export default function App() {
     const goOnline = async () => {
       setIsOnline(true);
       if(!isConfigured) return;
-      const n = await getSyncQueueLength().catch(()=>0);
-      if(n > 0){
-        setSyncing(true);
-        await flushSyncQueue(supabase).catch(()=>{});
-        setSyncing(false);
-      }
+      setSyncing(true);
+      await flushSyncQueue(supabase).catch(()=>{});
+      await flushUploads(supabase, linkUpload).catch(()=>{}); // 現場のオフラインアップロードを送信
+      setSyncing(false);
       setPendingSync(await getSyncQueueLength().catch(()=>0));
     };
     const goOffline = () => setIsOnline(false);
@@ -3665,15 +3699,19 @@ export default function App() {
     // ── 5. Poll queue every 10s ──────────────────────────────────────────────
     const poll = setInterval(async ()=>{
       const n = await getSyncQueueLength().catch(()=>0);
-      setPendingSync(n);
+      const pendingUploads = await getUploads().then(u=>u.length).catch(()=>0);
+      setPendingSync(n + pendingUploads);
       // Only flush if we have an active session (org loaded = safe to write)
-      if(n > 0 && navigator.onLine && isConfigured){
+      if((n > 0 || pendingUploads > 0) && navigator.onLine && isConfigured){
         const { data:{ session } } = await supabase.auth.getSession().catch(()=>({ data:{} }));
         if(!session) return; // not logged in yet, skip
         setSyncing(true);
         const result = await flushSyncQueue(supabase).catch(()=>({ synced:0, failed:0, error:null }));
+        await flushUploads(supabase, linkUpload).catch(()=>{}); // 現場アップロードを送信
         setSyncing(false);
-        const remaining = await getSyncQueueLength().catch(()=>0);
+        const remainingQ = await getSyncQueueLength().catch(()=>0);
+        const remainingU = await getUploads().then(u=>u.length).catch(()=>0);
+        const remaining = remainingQ + remainingU;
         setPendingSync(remaining);
         // Surface a diagnostic error, or clear it once everything drained
         if(remaining === 0){ setSyncError(null); }
