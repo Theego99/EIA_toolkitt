@@ -301,7 +301,36 @@ const RISK_CFG = {
   low:   { label:"低リスク", c:C.mid,   bg:C.light },
 };
 
-const BLANK_SPECIES = { name:"", latin:"", type:"植物", status:"LC", protected:false, count:1, location:"", date:"", notes:"" };
+const BLANK_SPECIES = { name:"", latin:"", type:"植物", status:"LC", protected:false, count:1, location:"", date:"", notes:"", photos:[] };
+
+// 事業種 → 推奨調査テンプレート（技術指針の重点項目に基づく）
+const TYPE_TO_TEMPLATE = {
+  wind:"bio", solar:"eco", thermal:"air", hydro:"river", geo:"air", nuclear:"eco",
+  road:"noise", rail:"noise", airport:"noise",
+  dam:"river", river:"river", port:"river", reclaim:"river",
+  housing:"eco", industry:"soil", landadj:"eco", waste:"air", other:"bio",
+};
+
+// 現場写真の軽量プレビュー（オフラインでも表示できるようdataURLで案件JSONに保持）
+function makePreview(file, max=320, q=0.65) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    const u = URL.createObjectURL(file);
+    img.onload = () => {
+      try {
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(img.width*scale));
+        c.height = Math.max(1, Math.round(img.height*scale));
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(u);
+        res(c.toDataURL("image/jpeg", q));
+      } catch(e) { URL.revokeObjectURL(u); rej(e); }
+    };
+    img.onerror = (e) => { URL.revokeObjectURL(u); rej(e); };
+    img.src = u;
+  });
+}
 
 
 // ── BUILT-IN SURVEY TYPE TEMPLATES ────────────────────────────────────────────
@@ -1257,6 +1286,31 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
     setSaved(true); setTimeout(()=>setSaved(false),3000);
   };
 
+  // 現場写真の追加（オフライン安全）：Blobをまずローカル保存→オンライン時にStorageへ
+  const addSpeciesPhotos = async (files) => {
+    for (const file of Array.from(files||[])) {
+      if (!/^image\//.test(file.type)) continue;
+      const uploadId = `up_${Date.now()}_${Math.random().toString(36).slice(2,7)}`;
+      const path = `${project.id}/species/${Date.now()}_${file.name.replace(/[^\w.\-]+/g,"_")}`;
+      const preview = await makePreview(file).catch(()=>null);
+      let url = null, pending = true;
+      if (isConfigured) {
+        await saveUpload({ id:uploadId, projectId:String(project.id), path,
+          blob:file, name:file.name, kind:"species" }).catch(()=>{});
+        if (navigator.onLine) {
+          const { error } = await supabase.storage.from("project-docs").upload(path, file, { upsert:true });
+          if (!error) {
+            const { data } = supabase.storage.from("project-docs").getPublicUrl(path);
+            url = data?.publicUrl || null; pending = false;
+            await deleteUpload(uploadId).catch(()=>{});
+          }
+        }
+      } else { url = preview; pending = false; } // demo mode
+      setNewSp(p => ({ ...p, photos:[...(p.photos||[]),
+        { id:uploadId, uploadId, url, pending, preview, name:file.name }] }));
+    }
+  };
+
   const addSpecies = () => {
     const editing = editSpIdx!==null;
     const stamped = { ...newSp,
@@ -1595,6 +1649,7 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
                       <Chip color={C.blue} bg={C.blueLight} size={11}>{sp.type}</Chip>
                       <Chip color={sc.c} bg={sc.bg} size={11}>{sc.label}</Chip>
                       {sp.protected && <Chip color={C.red} bg={C.redLight} size={11}>保護指定</Chip>}
+                      {(sp.photos||[]).length>0 && <Chip color={C.mid} bg={C.light} size={11}>📷{(sp.photos||[]).length}</Chip>}
                       <span style={{ color:C.textMuted, fontSize:12,
                         fontFamily:"'DM Mono',monospace" }}>{sp.count}個体</span>
                       <Btn variant="ghost" size="sm" onClick={()=>{ setEditSpIdx(i); setNewSp({...sp}); setAddingSpecies(true); }}>編集</Btn>
@@ -1979,7 +2034,20 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
                   const sc = STATUS_CFG[sp.status] || STATUS_CFG.LC;
                   return <tr key={i} style={{ borderBottom:`1px solid ${C.borderLight}`,
                     background:sp.protected?`${C.redLight}44`:"transparent" }}>
-                    <td style={{ padding:"12px 14px", color:C.text, fontSize:14, fontWeight:700 }}>{sp.name}</td>
+                    <td style={{ padding:"12px 14px" }}>
+                      <div style={{ color:C.text, fontSize:14, fontWeight:700 }}>{sp.name}</div>
+                      {(sp.photos||[]).length>0 && <div style={{ display:"flex", gap:4, marginTop:5 }}>
+                        {(sp.photos||[]).slice(0,3).map(ph=>(
+                          <a key={ph.id} href={ph.url||ph.preview} target="_blank" rel="noreferrer">
+                            <img src={ph.url||ph.preview} alt=""
+                              style={{ width:34, height:34, objectFit:"cover", borderRadius:6,
+                                border:`1.5px solid ${ph.pending?C.amber:C.borderLight}` }}/>
+                          </a>
+                        ))}
+                        {(sp.photos||[]).length>3 && <span style={{ fontSize:11, color:C.textMuted,
+                          alignSelf:"center" }}>+{(sp.photos||[]).length-3}</span>}
+                      </div>}
+                    </td>
                     <td style={{ padding:"12px 14px", color:C.textMuted, fontSize:12, fontStyle:"italic" }}>{sp.latin||"—"}</td>
                     <td style={{ padding:"12px 14px" }}><Chip color={C.blue} bg={C.blueLight} size={11}>{sp.type}</Chip></td>
                     <td style={{ padding:"12px 14px" }}><Chip color={sc.c} bg={sc.bg} size={11}>{sc.label}</Chip></td>
@@ -2118,6 +2186,41 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
             <textarea value={newSp.notes}
               onChange={e=>setNewSp(p=>({...p,notes:e.target.value}))}
               rows={2} style={{ ...INP, fontSize:14, resize:"vertical" }} />
+          </div>
+          {/* 現場写真（カメラ起動対応・オフライン保存） */}
+          <div style={{ gridColumn:"1/-1" }}>
+            <label style={{ display:"block", color:C.textMid, fontSize:14,
+              fontWeight:700, marginBottom:7 }}>
+              現場写真
+              <span style={{ fontWeight:400, fontSize:12, color:C.textFaint, marginLeft:8 }}>
+                オフラインでも保存され、接続回復後に自動アップロードされます
+              </span>
+            </label>
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+              {(newSp.photos||[]).map((ph,pi)=>(
+                <div key={ph.id} style={{ position:"relative" }}>
+                  <img src={ph.url||ph.preview} alt={ph.name}
+                    style={{ width:76, height:76, objectFit:"cover", borderRadius:8,
+                      border:`2px solid ${ph.pending?C.amber:C.borderLight}` }}/>
+                  {ph.pending && <span style={{ position:"absolute", bottom:2, left:2,
+                    background:C.amberLight, color:C.amber, fontSize:9, fontWeight:700,
+                    padding:"1px 4px", borderRadius:4 }}>⏳同期待ち</span>}
+                  <button onClick={()=>setNewSp(p=>({...p,
+                      photos:p.photos.filter((_,x)=>x!==pi)}))}
+                    style={{ position:"absolute", top:-6, right:-6, width:20, height:20,
+                      borderRadius:"50%", border:"none", background:C.red, color:"#fff",
+                      fontSize:11, cursor:"pointer", lineHeight:1 }}>×</button>
+                </div>
+              ))}
+              <label style={{ width:76, height:76, borderRadius:8, cursor:"pointer",
+                border:`2px dashed ${C.border}`, display:"flex", flexDirection:"column",
+                alignItems:"center", justifyContent:"center", color:C.textMuted, fontSize:11 }}>
+                <span style={{ fontSize:20 }}>📷</span>撮影/追加
+                <input type="file" accept="image/*" capture="environment" multiple
+                  style={{ display:"none" }}
+                  onChange={e=>{ addSpeciesPhotos(e.target.files); e.target.value=""; }}/>
+              </label>
+            </div>
           </div>
         </div>
         <label style={{ display:"flex", alignItems:"center", gap:10,
@@ -2605,7 +2708,8 @@ function NewProjectModal({ onSave, onCancel, savedTemplates=[], onSaveTemplate, 
   const f = k => e => setD(p => ({...p,[k]:e.target.value}));
 
   // Selected template: { type:"builtin"|"saved", id }
-  const [selectedTmpl, setSelectedTmpl] = useState({ type:"builtin", id:"bio" });
+  const [selectedTmpl, setSelectedTmpl] = useState({ type:"builtin", id:TYPE_TO_TEMPLATE.wind });
+  const [tmplTouched, setTmplTouched] = useState(false); // 手動選択後は自動推奨を停止
   // For building/editing a template inline
   const [buildingTemplate, setBuildingTemplate] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState(null);
@@ -2702,7 +2806,13 @@ function NewProjectModal({ onSave, onCancel, savedTemplates=[], onSaveTemplate, 
             </div>)}
             <div>
               <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>事業種別 *</label>
-              <select value={d.type} onChange={f("type")} style={{ ...INP, fontSize:14 }}>
+              <select value={d.type} onChange={e=>{
+                  const v = e.target.value;
+                  setD(p=>({...p, type:v}));
+                  // 技術指針の重点項目に基づき推奨テンプレートを自動選択
+                  // （ユーザーが手動でテンプレートを選んだ後は上書きしない）
+                  if(!tmplTouched) setSelectedTmpl({ type:"builtin", id:TYPE_TO_TEMPLATE[v]||"bio" });
+                }} style={{ ...INP, fontSize:14 }}>
                 {Object.entries(ALL_PROJECT_TYPES.reduce((acc,t)=>{
                   acc[t.g]=acc[t.g]||[];acc[t.g].push(t);return acc;},{}))
                   .map(([grp,types])=><optgroup key={grp} label={grp}>
@@ -2788,14 +2898,20 @@ function NewProjectModal({ onSave, onCancel, savedTemplates=[], onSaveTemplate, 
 
         {/* ── Step 2: Template picker ── */}
         {step===2 && <>
-          <p style={{ color:C.textMuted, fontSize:13, marginBottom:16 }}>
+          <p style={{ color:C.textMuted, fontSize:13, marginBottom:10 }}>
             プロジェクトの各段階で使うタスクのテンプレートを選んでください。
             標準テンプレートは自動で設定されます。保存済みテンプレートを使うか、新規作成も可能です。
           </p>
+          {!tmplTouched && <div style={{ marginBottom:14, padding:"9px 13px",
+            background:C.light, border:`1px solid ${C.primary}33`, borderRadius:8,
+            fontSize:12.5, color:C.primary }}>
+            ✓ 事業種「{ALL_PROJECT_TYPES.find(t=>t.v===d.type)?.l||d.type}」の重点項目に基づき
+            「{SURVEY_TYPES.find(s=>s.id===selectedTmpl.id)?.label||selectedTmpl.id}」テンプレートを推奨選択しています
+          </div>}
           <TemplateManager
             savedTemplates={savedTemplates}
             selected={selectedTmpl}
-            onSelect={setSelectedTmpl}
+            onSelect={(t)=>{ setSelectedTmpl(t); setTmplTouched(true); }}
             onNew={()=>{ setEditingTemplate(null); setBuildingTemplate(true); }}
             onEdit={t=>{ setEditingTemplate(t); setBuildingTemplate(true); }}
             onDelete={onDeleteTemplate}
@@ -3482,9 +3598,13 @@ function AccountModule({ org, currentUser, members=[], onUpdateRole, projectCoun
             ))}
           </tr></thead>
           <tbody>
-            {TEAM.map(m=>{
-              const r=ROLE_CFG[m.role];
-              const isSelf = m.email === currentUser?.email;
+            {members.length===0 && <tr><td colSpan={4} style={{ padding:"24px 18px",
+              textAlign:"center", color:C.textMuted, fontSize:13 }}>
+              メンバーはまだ登録されていません
+            </td></tr>}
+            {members.map(m=>{
+              const r=ROLE_CFG[m.role]||ROLE_CFG.surveyor;
+              const isSelf = !!m.self;
               return <tr key={m.id} style={{ borderBottom:`1px solid ${C.borderLight}`,
                 background:isSelf?C.light:"transparent" }}>
                 <td style={{ padding:"12px 18px" }}>
@@ -3492,22 +3612,21 @@ function AccountModule({ org, currentUser, members=[], onUpdateRole, projectCoun
                     <div style={{ width:32, height:32, borderRadius:"50%",
                       background:`linear-gradient(135deg,${C.primary},${C.blue})`,
                       display:"flex", alignItems:"center", justifyContent:"center",
-                      color:C.white, fontWeight:700, fontSize:13 }}>{m.name[0]}</div>
+                      color:C.white, fontWeight:700, fontSize:13 }}>{(m.name||"?")[0]}</div>
                     <div>
                       <div style={{ color:C.text, fontSize:14, fontWeight:600 }}>{m.name}</div>
                       {isSelf && <span style={{ fontSize:11, color:C.mid }}>あなた</span>}
                     </div>
                   </div>
                 </td>
-                <td style={{ padding:"12px 18px", color:C.textMuted, fontSize:13 }}>{m.email}</td>
+                <td style={{ padding:"12px 18px", color:C.textMuted, fontSize:13 }}>{m.email||"—"}</td>
                 <td style={{ padding:"12px 18px" }}><Chip color={r.color} bg={r.badge}>{r.label}</Chip></td>
                 <td style={{ padding:"12px 18px" }}>
-                  {!isSelf && <div style={{ display:"flex", gap:6 }}>
-                    <select defaultValue={m.role} style={{ ...INP, fontSize:12, padding:"5px 10px" }}>
-                      {Object.entries(ROLE_CFG).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
-                    </select>
-                    <Btn variant="danger" size="sm">削除</Btn>
-                  </div>}
+                  {!isSelf && <select value={m.role}
+                    onChange={e=>onUpdateRole?.(m.id, e.target.value)}
+                    style={{ ...INP, fontSize:12, padding:"5px 10px" }}>
+                    {Object.entries(ROLE_CFG).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+                  </select>}
                 </td>
               </tr>;
             })}
@@ -3652,10 +3771,18 @@ export default function App() {
   const projectsRef = React.useRef(projects);
   useEffect(()=>{ projectsRef.current = projects; }, [projects]);
 
-  // When a queued field upload finishes, write its public URL back onto the doc
-  const linkUpload = React.useCallback(async (projectId, uploadId, url) => {
+  // When a queued field upload finishes, write its public URL back onto the
+  // matching record (document or species photo)
+  const linkUpload = React.useCallback(async (projectId, uploadId, url, kind) => {
     const p = projectsRef.current.find(x => String(x.id)===String(projectId));
     if(!p) return;
+    if (kind === "species") {
+      const species = (p.species||[]).map(s => ({ ...s,
+        photos: (s.photos||[]).map(ph =>
+          ph.uploadId===uploadId ? {...ph, url, pending:false} : ph) }));
+      await updateProject({ ...p, species });
+      return;
+    }
     const documents = (p.documents||[]).map(d =>
       d.uploadId===uploadId ? {...d, url, pending:false} : d);
     await updateProject({ ...p, documents });

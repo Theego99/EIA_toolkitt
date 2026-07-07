@@ -576,18 +576,26 @@ export function buildDocument(kind, project) {
       const rl = species.filter((s) => ['CR', 'EN', 'VU', 'NT'].includes(s.status))
       const list = species.length
         ? `<p>確認種数：<b>${species.length}</b>種（うち重要種 <b>${rl.length}</b>種）</p>` +
-          `<table class="tbl"><thead><tr><th>和名</th><th>学名</th><th>分類</th><th>カテゴリ</th><th>確認地点</th><th>記録者</th></tr></thead><tbody>` +
+          `<table class="tbl"><thead><tr><th>和名</th><th>学名</th><th>分類</th><th>カテゴリ</th><th>確認地点</th><th>記録者</th><th>現場写真</th></tr></thead><tbody>` +
           species
-            .map(
-              (s) =>
-                `<tr><td>${esc(s.name)}</td><td><i>${esc(s.latin || '')}</i></td><td>${esc(
-                  s.type || ''
-                )}</td><td>${
-                  ['CR', 'EN', 'VU', 'NT'].includes(s.status)
-                    ? `<b style="color:#b91c1c">${esc(s.status)}</b>`
-                    : esc(s.status || '')
-                }</td><td>${esc(s.location || '')}</td><td>${esc(s.recordedBy || '')}</td></tr>`
-            )
+            .map((s) => {
+              // 写真：http(s) の公開URL または オフライン用dataURLプレビューのみ許可
+              const photos = (s.photos || [])
+                .map((p) => p.url || p.preview)
+                .filter((u) => typeof u === 'string' && /^(https?:\/\/|data:image\/)/.test(u))
+                .slice(0, 2)
+                .map((u) => `<img class="ph-img" src="${esc(u)}" alt="">`)
+                .join('')
+              return `<tr><td>${esc(s.name)}</td><td><i>${esc(s.latin || '')}</i></td><td>${esc(
+                s.type || ''
+              )}</td><td>${
+                ['CR', 'EN', 'VU', 'NT'].includes(s.status)
+                  ? `<b style="color:#b91c1c">${esc(s.status)}</b>`
+                  : esc(s.status || '')
+              }</td><td>${esc(s.location || '')}</td><td>${esc(s.recordedBy || '')}</td><td>${
+                photos || '<span class="muted">—</span>'
+              }</td></tr>`
+            })
             .join('') +
           `</tbody></table>`
         : '<p class="muted">確認種データが未登録です。案件の「種記録」から入力してください。</p>'
@@ -633,6 +641,7 @@ export function buildDocument(kind, project) {
     .tbl th{background:#1B4332;color:#fff;padding:8px 10px;text-align:left}
     .tbl td{border:1px solid #ddd8ce;padding:8px 10px;vertical-align:top}
     .muted{color:#8a948e}.small{font-size:12px;margin-top:4px}
+    .ph-img{height:64px;border-radius:4px;margin:1px 3px 1px 0;vertical-align:middle}
     @media print{body{padding:0}.cover{padding:200px 0 100px}}
   </style></head><body>
     <div class="cover">
