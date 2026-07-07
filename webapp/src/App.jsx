@@ -992,14 +992,20 @@ function DocumentsTab({ project, onUpdate, currentUser }) {
   const [dragOver, setDragOver]     = useState(false);
   const [editDoc, setEditDoc]       = useState(null); // doc being status-edited
   const [filter, setFilter]         = useState("all");
+  // 登録先：この文書がどの段階・どの作業の成果物かを必ず紐づける
+  const [upStage, setUpStage]       = useState(project.stage);
+  const [upTaskId, setUpTaskId]     = useState("");
   const fileRef = React.useRef();
 
   const docs = project.documents || [];
+  const projStages = project.customStages || STAGES;
+  const stageTaskList = project.tasks?.[upStage] || [];
 
   // ── helpers ─────────────────────────────────────────────────────────────
   const saveDoc = (updated) => onUpdate({ ...project, documents: updated });
 
   const addDocRecord = (file, url, extra={}) => {
+    const task = stageTaskList.find(t => t.id === upTaskId);
     const doc = {
       id: `doc_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
       name: file.name,
@@ -1009,7 +1015,10 @@ function DocumentsTab({ project, onUpdate, currentUser }) {
       status: "作業中",
       uploadedBy: currentUser?.name || "自分",
       uploadedAt: new Date().toISOString().split("T")[0],
-      stage: project.stage,
+      // 証拠の連鎖：文書は必ず「段階」に、可能なら「作業項目」に紐づく
+      stage: Number(upStage) || project.stage,
+      taskId: task?.id || null,
+      taskLabel: task?.label || null,
       uploadId: extra.uploadId || null,
       pending: !!extra.pending, // true = まだSupabase Storageへ未アップロード（オフライン）
     };
@@ -1085,7 +1094,7 @@ function DocumentsTab({ project, onUpdate, currentUser }) {
       alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:10 }}>
       <div>
         <div style={{ color:C.text, fontSize:16, fontWeight:700,
-          fontFamily:"'Noto Serif JP',serif" }}>文書管理</div>
+          fontFamily:"'Noto Serif JP',serif" }}>成果物・証拠文書台帳</div>
         <div style={{ color:C.textMuted, fontSize:13, marginTop:2 }}>
           {docs.length}件のファイル
           {!isConfigured && <span style={{ color:C.amber, marginLeft:8,
@@ -1100,6 +1109,40 @@ function DocumentsTab({ project, onUpdate, currentUser }) {
       </div>
       <input ref={fileRef} type="file" multiple style={{ display:"none" }}
         onChange={e=>handleFiles(e.target.files)} />
+    </div>
+
+    {/* この機能の役割 */}
+    <div style={{ background:C.light, border:`1px solid ${C.primary}33`, borderRadius:10,
+      padding:"11px 14px", marginBottom:14, fontSize:12.5, color:C.textMid, lineHeight:1.7 }}>
+      <strong style={{ color:C.primary }}>この画面の役割：</strong>
+      法定手続きの各段階で発生する成果物（測定データ・図面・議事録・行政提出書類など）を
+      <strong>段階・作業項目に紐づけて</strong>保管し、審査状態（作業中→レビュー中→承認済→提出済）を管理します。
+      ここに登録した文書は、生成される方法書・準備書の<strong>巻末「文書台帳」に自動掲載</strong>されます。
+    </div>
+
+    {/* 登録先の指定（証拠の連鎖） */}
+    <div style={{ display:"flex", gap:10, marginBottom:12, flexWrap:"wrap",
+      alignItems:"flex-end", background:C.surface, border:`1px solid ${C.border}`,
+      borderRadius:10, padding:"12px 14px" }}>
+      <div style={{ flex:"0 0 auto" }}>
+        <label style={{ display:"block", color:C.textMid, fontSize:12, fontWeight:700, marginBottom:5 }}>
+          登録先の段階
+        </label>
+        <select value={upStage} onChange={e=>{ setUpStage(Number(e.target.value)); setUpTaskId(""); }}
+          style={{ ...INP, fontSize:13, padding:"7px 10px" }}>
+          {projStages.map(s=><option key={s.id} value={s.id}>第{s.id}段階 {s.short||s.label}</option>)}
+        </select>
+      </div>
+      <div style={{ flex:1, minWidth:220 }}>
+        <label style={{ display:"block", color:C.textMid, fontSize:12, fontWeight:700, marginBottom:5 }}>
+          対応する作業項目（この文書は何の成果物か）
+        </label>
+        <select value={upTaskId} onChange={e=>setUpTaskId(e.target.value)}
+          style={{ ...INP, fontSize:13, padding:"7px 10px", width:"100%" }}>
+          <option value="">段階全体（作業項目を指定しない）</option>
+          {stageTaskList.map(t=><option key={t.id} value={t.id}>{t.label}</option>)}
+        </select>
+      </div>
     </div>
 
     {/* Filter pills */}
@@ -1150,7 +1193,17 @@ function DocumentsTab({ project, onUpdate, currentUser }) {
           padding:"32px 0" }}>
           {docs.length===0 ? "まだファイルがありません" : "該当するファイルなし"}
         </div>
-      : filtered.map(doc => (
+      : projStages.filter(s=>filtered.some(d=>Number(d.stage)===s.id)).map(sg => (
+        <div key={sg.id} style={{ marginBottom:16 }}>
+        {/* 段階ごとのグループ見出し — 文書は法定手続きの段階に属する */}
+        <div style={{ display:"flex", alignItems:"center", gap:8, margin:"2px 0 8px" }}>
+          <span style={{ width:9, height:9, borderRadius:3, background:sg.color||C.textMuted }}/>
+          <span style={{ fontSize:13, fontWeight:700, color:C.text }}>
+            第{sg.id}段階 {sg.short||sg.label}</span>
+          <span style={{ fontSize:11, color:C.textFaint }}>
+            {filtered.filter(d=>Number(d.stage)===sg.id).length}件</span>
+        </div>
+        {filtered.filter(d=>Number(d.stage)===sg.id).map(doc => (
         <div key={doc.id} style={{ display:"flex", alignItems:"center", gap:12,
           padding:"12px 14px", background:C.surface, borderRadius:10, marginBottom:8,
           border:`1px solid ${C.borderLight}`,
@@ -1167,7 +1220,9 @@ function DocumentsTab({ project, onUpdate, currentUser }) {
               <span>·</span>
               <span>{doc.uploadedAt}</span>
               <span>·</span>
-              <span>第{doc.stage}段階</span>
+              {doc.taskLabel
+                ? <span style={{ color:C.mid, fontWeight:700 }}>📎 {doc.taskLabel}</span>
+                : <span>段階全体の資料</span>}
               {doc.uploadedBy && <><span>·</span><span>{doc.uploadedBy}</span></>}
               {doc.pending && <span style={{ color:C.amber, fontWeight:700 }}>· ⏳ 同期待ち（オフライン保存済）</span>}
             </div>
@@ -1204,6 +1259,8 @@ function DocumentsTab({ project, onUpdate, currentUser }) {
             <Btn variant="danger" size="sm"
               onClick={()=>deleteDoc(doc.id)}>✕</Btn>
           </div>
+        </div>
+        ))}
         </div>
       ))
     }
@@ -1587,6 +1644,12 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
               <span onClick={()=>toggleTask(task.id)} style={{ flex:1, cursor:"pointer",
                 color:task.done?C.textMuted:C.text, fontSize:14,
                 textDecoration:task.done?"line-through":"none" }}>{task.label}</span>
+              {(project.documents||[]).filter(d=>d.taskId===task.id).length>0 &&
+                <span onClick={()=>setTab("documents")} title="紐づく文書（文書台帳へ）"
+                  style={{ fontSize:11, color:C.mid, fontWeight:700, cursor:"pointer",
+                    background:C.light, padding:"3px 7px", borderRadius:6, flexShrink:0 }}>
+                  📎{(project.documents||[]).filter(d=>d.taskId===task.id).length}
+                </span>}
               <button onClick={()=>setOpenNote(openNote===task.id?null:task.id)}
                 style={{ background:"none", border:"none", cursor:"pointer", flexShrink:0,
                   color:task.note?C.primary:C.textFaint, fontSize:12, fontWeight:task.note?700:400,
@@ -1595,6 +1658,16 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
               </button>
             </div>
             {openNote===task.id && <div style={{ margin:"8px 0 2px 38px" }}>
+              {(project.documents||[]).filter(d=>d.taskId===task.id).length>0 &&
+                <div style={{ marginBottom:8, display:"flex", flexWrap:"wrap", gap:6 }}>
+                  {(project.documents||[]).filter(d=>d.taskId===task.id).map(d=>(
+                    <a key={d.id} href={d.url||undefined} target="_blank" rel="noreferrer"
+                      style={{ fontSize:11.5, color:C.mid, background:C.light,
+                        padding:"3px 8px", borderRadius:6, textDecoration:"none" }}>
+                      {fileIcon(d.name)} {d.name}{d.pending?" ⏳":""}
+                    </a>
+                  ))}
+                </div>}
               <textarea defaultValue={task.note||""}
                 placeholder="調査結果・実測値・使用機材・担当者・所見など（自動保存されます）"
                 onBlur={e=>setTaskNote(task.id, e.target.value)}

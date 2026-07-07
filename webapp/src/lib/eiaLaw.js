@@ -606,10 +606,31 @@ export function buildDocument(kind, project) {
         ch.sub.map((s) => `<h3>${esc(s)}</h3><p class="ph">［記載欄］</p>`).join('')
       )
     }
-    // 巻末：全段階の作業記録一覧
+    // 巻末：文書台帳（成果物・証拠ファイルの一覧）＋ 全段階の作業記録
     if (ch.n === '巻末') {
+      const docs = project?.documents || []
+      const docRegister = docs.length
+        ? `<h3>文書台帳（成果物・証拠ファイル）</h3>` +
+          `<table class="tbl"><thead><tr><th style="width:88px">段階</th><th>対応する作業項目</th><th>文書名</th><th style="width:76px">審査状態</th><th style="width:88px">登録者</th><th style="width:92px">登録日</th></tr></thead><tbody>` +
+          docs
+            .slice()
+            .sort((a, b) => (Number(a.stage) || 0) - (Number(b.stage) || 0))
+            .map(
+              (d) =>
+                `<tr><td>${esc(stageShort(d.stage))}</td><td>${esc(
+                  d.taskLabel || '段階全体'
+                )}</td><td>${esc(d.name)}${
+                  /^https?:\/\//.test(d.url || '') ? ` <a href="${esc(d.url)}" style="font-size:11px">[URL]</a>` : ''
+                }</td><td>${esc(d.status || '')}</td><td>${esc(d.uploadedBy || '')}</td><td>${esc(
+                  d.uploadedAt || ''
+                )}</td></tr>`
+            )
+            .join('') +
+          `</tbody></table>`
+        : ''
       const all = taskRecords([1, 2, 3, 4, 5, 6])
       return (
+        docRegister +
         (all ? `<h3>作業記録一覧（全段階）</h3>${all}` : '') +
         '<p class="ph">［生データ・図面・気象統計・確認動植物全リスト等を添付］</p>'
       )
