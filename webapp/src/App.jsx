@@ -256,6 +256,7 @@ const STATUS_CFG = {
   EN:{ label:"絶滅危惧IB類", c:"#C2410C", bg:"#FFEDD5" },
   VU:{ label:"絶滅危惧II類", c:"#B45309", bg:"#FEF3C7" },
   NT:{ label:"準絶滅危惧",   c:"#1D4ED8", bg:"#DBEAFE" },
+  DD:{ label:"情報不足",     c:"#6B7280", bg:"#F3F4F6" },
   LC:{ label:"軽度懸念",     c:"#065F46", bg:"#D1FAE5" },
 };
 

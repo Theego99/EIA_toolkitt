@@ -6,8 +6,11 @@
 // ※ 実務では最新の環境省レッドリスト・都道府県RDBで最終確認すること。
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { RED_LIST_OFFICIAL } from './redListData.js'
+
+// 手入力の補完リスト（公式CSVに含まれない哺乳類・魚類・昆虫類・貝類・甲殻類等）。
 // { name(和名), latin(学名), type(分類群), status(RLカテゴリ), protected(種の保存法等) }
-export const RED_LIST = [
+const CURATED = [
   // ── 猛禽類・鳥類 ──────────────────────────────────────────────
   { name: 'イヌワシ', latin: 'Aquila chrysaetos japonica', type: '鳥類', status: 'EN', protected: true },
   { name: 'クマタカ', latin: 'Nisaetus nipalensis', type: '鳥類', status: 'EN', protected: true },
@@ -209,9 +212,24 @@ export const RED_LIST = [
   { name: 'アサザ', latin: 'Nymphoides peltata', type: '植物', status: 'NT', protected: false },
 ]
 
-// カテゴリを アプリの STATUS_CFG（CR/EN/VU/NT/LC）へ正規化
+// 公式レッドリスト（自動生成）を基盤に、公式に無い種のみ CURATED を追加してマージ。
+// 公式が権威データ、CURATED は補完（哺乳類・魚類・昆虫類等）。
+const _byName = new Map()
+for (const e of RED_LIST_OFFICIAL) if (!_byName.has(e.name)) _byName.set(e.name, e)
+for (const e of CURATED) {
+  if (_byName.has(e.name)) {
+    // 公式に無い保護指定フラグだけ補完
+    const cur = _byName.get(e.name)
+    if (e.protected && !cur.protected) cur.protected = true
+  } else {
+    _byName.set(e.name, e)
+  }
+}
+export const RED_LIST = [..._byName.values()]
+
+// カテゴリを アプリの STATUS_CFG（CR/EN/VU/NT/DD/LC）へ正規化
 function normStatus(s) {
-  return ['CR', 'EN', 'VU', 'NT', 'LC'].includes(s) ? s : 'NT' // DD等はNTに寄せる
+  return ['CR', 'EN', 'VU', 'NT', 'DD', 'LC'].includes(s) ? s : 'NT'
 }
 
 // name(和名) 完全一致で参照。見つかれば {latin,type,status,protected} を返す。
