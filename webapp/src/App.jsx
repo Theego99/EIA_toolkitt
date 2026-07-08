@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { supabase, isConfigured } from "./lib/supabase.js";
 import * as EIA from "./lib/eiaLaw.js";
-import { lookupSpecies, suggestSpecies, RED_LIST_NAMES } from "./lib/redList.js";
+import { suggestSpecies } from "./lib/redList.js";
 
 // ── OFFLINE STORE (IndexedDB) ─────────────────────────────────────────────────
 const DB_NAME = "eia-toolkit", DB_VERSION = 3;
@@ -1268,6 +1268,54 @@ function DocumentsTab({ project, onUpdate, currentUser }) {
 }
 
 
+// 種名の入力補助：打ちながら上位5件の候補をドロップダウン表示し、選ぶと
+// 学名・分類群・レッドリストカテゴリ・保護指定を自動補完する。
+function SpeciesTypeahead({ value, onName, onPick }) {
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(0);
+  const sug = suggestSpecies(value, 5);
+  const show = open && (value||"").trim().length > 0 && sug.length > 0;
+  return (
+    <div style={{ position:"relative" }}>
+      <input type="text" value={value} autoComplete="off"
+        placeholder="例）イヌワシ（入力すると候補が表示されます）"
+        onChange={e=>{ onName(e.target.value); setOpen(true); setHi(0); }}
+        onFocus={()=>setOpen(true)}
+        onBlur={()=>setTimeout(()=>setOpen(false), 150)}
+        onKeyDown={e=>{
+          if(!show) return;
+          if(e.key==="ArrowDown"){ e.preventDefault(); setHi(h=>Math.min(h+1, sug.length-1)); }
+          else if(e.key==="ArrowUp"){ e.preventDefault(); setHi(h=>Math.max(h-1,0)); }
+          else if(e.key==="Enter"){ e.preventDefault(); onPick(sug[hi]); setOpen(false); }
+          else if(e.key==="Escape"){ setOpen(false); }
+        }}
+        style={{ ...INP, fontSize:14 }} />
+      {show && <div style={{ position:"absolute", top:"100%", left:0, right:0, zIndex:60,
+        marginTop:4, background:C.surface, border:`1px solid ${C.border}`, borderRadius:10,
+        boxShadow:"0 8px 24px #00000022", overflow:"hidden" }}>
+        {sug.map((s,idx)=>{
+          const sc = STATUS_CFG[s.status] || STATUS_CFG.LC;
+          return <div key={s.name}
+            onMouseDown={e=>{ e.preventDefault(); onPick(s); setOpen(false); }}
+            onMouseEnter={()=>setHi(idx)}
+            style={{ padding:"9px 12px", cursor:"pointer",
+              background:idx===hi?C.light:"transparent",
+              display:"flex", alignItems:"center", gap:10 }}>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{s.name}</div>
+              <div style={{ fontSize:11.5, color:C.textMuted, fontStyle:"italic",
+                overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                {s.latin} · {s.type}{s.protected?" · 保護指定":""}
+              </div>
+            </div>
+            <Chip color={sc.c} bg={sc.bg} size={11}>{s.status}</Chip>
+          </div>;
+        })}
+      </div>}
+    </div>
+  );
+}
+
 function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTemplate, currentUser }) {
   const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   const [project, setProject] = useState(initProject);
@@ -2194,8 +2242,7 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
           {editSpIdx!==null ? "確認種を編集" : "確認種を新規追加"}
         </h2>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
-          <datalist id="rl-species">{RED_LIST_NAMES.map(n=><option key={n} value={n} />)}</datalist>
-          {/* 種名：和名を入れると環境省レッドリストから学名・分類・カテゴリを自動補完 */}
+          {/* 種名：入力すると上位5件の候補が表示され、選ぶと学名・分類・RLカテゴリを自動補完 */}
           <div style={{ gridColumn:"1/-1" }}>
             <label style={{ display:"block", color:C.textMid, fontSize:14, fontWeight:700, marginBottom:7 }}>
               種名（和名）*
@@ -2203,16 +2250,10 @@ function ProjectDetail({ project: initProject, setActive, onUpdate, onSaveTempla
                 ✓ レッドリストから自動補完
               </span>}
             </label>
-            <input type="text" list="rl-species" value={newSp.name}
-              placeholder="例）イヌワシ（入力すると自動補完されます）"
-              onChange={e=>{
-                const name = e.target.value;
-                const hit = lookupSpecies(name);
-                setNewSp(p => hit
-                  ? { ...p, name, latin:hit.latin, type:hit.type, status:hit.status, protected:hit.protected, _rl:true }
-                  : { ...p, name, _rl:false });
-              }}
-              style={{ ...INP, fontSize:14 }} />
+            <SpeciesTypeahead value={newSp.name}
+              onName={name=>setNewSp(p=>({ ...p, name, _rl:false }))}
+              onPick={s=>setNewSp(p=>({ ...p, name:s.name, latin:s.latin, type:s.type,
+                status:s.status, protected:s.protected, _rl:true }))} />
           </div>
           {[
             { l:"学名",   k:"latin" },
