@@ -3,6 +3,8 @@ name: Deploy PWA to GitHub Pages
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 # Allow GITHUB_TOKEN to deploy to Pages
@@ -13,7 +15,7 @@ permissions:
 
 # One concurrent deploy; new pushes cancel in-progress runs
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -29,12 +31,21 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: webapp/package-lock.json
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Check release code
+        run: npm run lint
+
+      - name: Test storage, database policy and report workflows
+        run: npm test
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Build (Vite PWA)
         # VITE_BASE must match the repo name so asset paths resolve on
@@ -44,11 +55,13 @@ jobs:
         run: npm run build
 
       - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: webapp/dist
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     environment:

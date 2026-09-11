@@ -1,6 +1,6 @@
 {
-  "name": "EIAツールキット",
-  "short_name": "EIA",
+  "name": "Wildpass 環境アセスメント",
+  "short_name": "Wildpass",
   "description": "日本の環境影響評価（EIA）専用プロジェクト管理ツール",
   "start_url": ".",
   "scope": ".",
