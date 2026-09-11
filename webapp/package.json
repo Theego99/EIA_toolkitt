@@ -1,20 +1,28 @@
 {
   "name": "eia-toolkit",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
+    "lint": "eslint src/WorkspaceApp.jsx src/components src/data/workspace.js src/domain src/lib/supabase.js src/lib/pwa.js src/main.jsx",
+    "preview": "vite preview",
+    "test": "node --test --test-timeout=20000 tests/*.test.mjs",
+    "import:species": "node scripts/import-species.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",
+    "docx": "^9.7.1",
+    "docx-preview": "^0.4.0",
+    "fflate": "^0.8.3",
+    "idb": "^8.0.3",
+    "lucide-react": "^1.45.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@eslint/js": "^9.39.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
@@ -22,7 +30,9 @@
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
+    "fake-indexeddb": "^6.2.5",
     "globals": "^16.5.0",
+    "prettier": "^3.9.6",
     "vite": "^7.3.1"
   }
 }

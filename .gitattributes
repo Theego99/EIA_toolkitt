@@ -1,0 +1,2 @@
+# Preserve the exact published CSV bytes for source checksums and encodings.
+webapp/data/redlist/*.csv -text -whitespace
